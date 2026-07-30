@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Kiro Telemetry Dashboard</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="login-view" class="center-screen" hidden>
+  <div class="login-card">
+    <h1>Kiro Telemetry Dashboard</h1>
+    <p class="muted">Enterprise governance view of Kiro developer telemetry.</p>
+    <div id="login-error" class="error-banner" hidden></div>
+    <button id="login-btn" class="primary">Sign in with Cognito</button>
+  </div>
+</div>
+
+<div id="app-view" hidden>
+  <header class="topbar">
+    <span class="brand">Kiro Telemetry Dashboard</span>
+    <nav id="tabs" class="tabs" role="tablist">
+      <button role="tab" data-tab="architecture" class="active">Architecture</button>
+      <button role="tab" data-tab="overview">Overview</button>
+      <button role="tab" data-tab="usage">Usage &amp; Adoption</button>
+      <button role="tab" data-tab="security">Security &amp; Compliance</button>
+      <button role="tab" data-tab="quality">Prompt Quality</button>
+      <button role="tab" data-tab="productivity">Productivity</button>
+      <button role="tab" data-tab="cost">Cost Governance</button>
+      <button role="tab" data-tab="budget">Budget</button>
+      <button role="tab" data-tab="dora">DORA</button>
+      <button role="tab" data-tab="policy">Policy</button>
+    </nav>
+    <div class="controls">
+      <div id="range" class="range" role="group" aria-label="Date range">
+        <button data-days="7">7d</button>
+        <button data-days="30" class="active">30d</button>
+        <button data-days="90">90d</button>
+      </div>
+      <button id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">◐</button>
+      <button id="logout-btn" title="Sign out">Sign out</button>
+    </div>
+  </header>
+
+  <main id="content" class="viz-root">
+    <div id="loading" class="loading" hidden><div class="spinner"></div><span>Querying Athena…</span></div>
+    <div id="error-banner" class="error-banner" hidden></div>
+    <section id="panel" class="grid"></section>
+  </main>
+</div>
+
+<div id="tooltip" class="tooltip" hidden></div>
+
+<script src="config.js"></script>
+<script src="auth.js"></script>
+<script src="charts.js"></script>
+<script src="arch.js"></script>
+<script src="policy.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
