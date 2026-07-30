@@ -1,0 +1,557 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Kiro Telemetry Dashboard - Backend (Cognito user pool with admin-only
+  user creation, HTTP API with JWT authorizer, least-privilege query Lambda
+  in front of the kiro-governance Athena workgroup, alarms). The data layer
+  (Glue DB, Athena workgroup, tables/views) is owned by the
+  kiro-telemetry-governance stack and referenced here, never created.
+
+Parameters:
+  DatabaseName:
+    Type: String
+    Default: kiro_governance
+  WorkgroupName:
+    Type: String
+    Default: kiro-governance
+  LogBucketName:
+    Type: String
+    Description: Existing S3 bucket holding Kiro telemetry + Athena results (no s3:// prefix).
+  AthenaResultsPrefix:
+    Type: String
+    Default: kiro/athena-results/
+  OriginVerifySecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: >
+      Random secret CloudFront injects as x-origin-verify; the Lambda rejects
+      requests without it so the API cannot be called around CloudFront.
+  CognitoDomainPrefix:
+    Type: String
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{2,62}$'
+    Description: Globally-unique Cognito hosted-UI domain prefix.
+  AlarmEmail:
+    Type: String
+    Default: ''
+    Description: Optional email for operational alarms. Blank to skip.
+  LogBucketKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >
+      KMS key ARN if the log bucket uses SSE-KMS (Athena must decrypt objects
+      and encrypt results). Blank if the bucket uses SSE-S3.
+
+Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
+  HasKmsKey: !Not [!Equals [!Ref LogBucketKmsKeyArn, '']]
+
+Resources:
+
+  # ------------------------------------------------------------------
+  # Cognito — admin-created users only, strong passwords, optional MFA
+  # ------------------------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: kiro-dashboard-users
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true        # no self-signup, ever
+      AutoVerifiedAttributes: [email]
+      UsernameAttributes: [email]
+      MfaConfiguration: OPTIONAL
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 3
+      UserPoolAddOns:
+        AdvancedSecurityMode: ENFORCED        # adaptive auth + compromised-credential checks
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+  AdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admins
+      UserPoolId: !Ref UserPool
+      Description: May update the Kiro policy registry (PUT /api/policy).
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref CognitoDomainPrefix
+      UserPoolId: !Ref UserPool
+
+  # Callback URLs are placeholders until the frontend stack exists;
+  # scripts/deploy.sh updates them with the real CloudFront domain.
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: kiro-dashboard-spa
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false                    # public SPA client -> PKCE, no secret
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]                # authorization-code + PKCE only
+      AllowedOAuthScopes: [openid, email]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: ['https://example.invalid/callback']
+      LogoutURLs: ['https://example.invalid/']
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 8
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: hours
+
+  # ------------------------------------------------------------------
+  # Query Lambda — the ONLY path from the web tier to Athena
+  # ------------------------------------------------------------------
+  ApiFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kiro-dashboard-api-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AthenaQueryLeastPrivilege
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AthenaWorkgroupOnly
+                Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: !Sub arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${WorkgroupName}
+              - Sid: GlueReadCatalog
+                Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartitions
+                Resource:
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${DatabaseName}
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${DatabaseName}/*
+              - Sid: ReadTelemetryData
+                Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !Sub arn:aws:s3:::${LogBucketName}
+                  - !Sub arn:aws:s3:::${LogBucketName}/*
+              - Sid: WriteAthenaResultsOnly
+                Effect: Allow
+                Action: [s3:PutObject, s3:GetBucketLocation]
+                Resource:
+                  - !Sub arn:aws:s3:::${LogBucketName}
+                  - !Sub arn:aws:s3:::${LogBucketName}/${AthenaResultsPrefix}*
+              - Sid: PolicyRegistryReadWrite
+                Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub arn:aws:s3:::${LogBucketName}/kiro/policy/*
+              - Sid: MaterializedCacheReadWrite
+                Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub arn:aws:s3:::${LogBucketName}/kiro/cache/*
+              - Sid: SelfDescribeForHealth
+                Effect: Allow
+                Action: lambda:GetFunctionConfiguration
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:kiro-dashboard-api
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kiro-dashboard-api*
+              - !If
+                - HasKmsKey
+                - Sid: KmsForEncryptedTelemetry
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:GenerateDataKey
+                  Resource: !Ref LogBucketKmsKeyArn
+                - !Ref AWS::NoValue
+
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: kiro-dashboard-api
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      MemorySize: 256
+      # 900s serves the EventBridge cache-warmer sweep; user-facing HTTP
+      # requests are still bounded by API Gateway's hard ~29s cut.
+      Timeout: 900
+      ReservedConcurrentExecutions: 10        # blast-radius + cost cap
+      Role: !GetAtt ApiFunctionRole.Arn
+      Environment:
+        Variables:
+          DATABASE: !Ref DatabaseName
+          WORKGROUP: !Ref WorkgroupName
+          ORIGIN_VERIFY_SECRET: !Ref OriginVerifySecret
+          LOG_BUCKET: !Ref LogBucketName
+          POLICY_PREFIX: kiro/policy/
+          CACHE_PREFIX: kiro/cache/
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              # placeholder; scripts/deploy.sh uploads lambda/api/ as the real code
+              return {"statusCode": 503, "body": "not deployed"}
+
+  # ------------------------------------------------------------------
+  # HTTP API — JWT authorizer on every route, throttled, access-logged
+  # ------------------------------------------------------------------
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: kiro-dashboard-api
+      ProtocolType: HTTP
+      # No CORS configuration: the API is served same-origin behind CloudFront.
+
+  JwtAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizerType: JWT
+      Name: cognito-jwt
+      IdentitySource: ['$request.header.Authorization']
+      JwtConfiguration:
+        Audience: [!Ref UserPoolClient]
+        Issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiFunction.Arn
+      PayloadFormatVersion: '2.0'
+      TimeoutInMillis: 29000
+
+  ApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /api/{proxy+}'
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub integrations/${ApiIntegration}
+
+  ApiPutRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'PUT /api/policy'
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub integrations/${ApiIntegration}
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/apigateway/kiro-dashboard-api
+      RetentionInDays: 90
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 10
+        ThrottlingBurstLimit: 20
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp",
+          "requestTime":"$context.requestTime","routeKey":"$context.routeKey",
+          "status":"$context.status","latency":"$context.responseLatency",
+          "sub":"$context.authorizer.claims.sub"}
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*
+
+  # ------------------------------------------------------------------
+  # Cache warmer — SPICE-equivalent: refresh the S3 materialized cache
+  # every 15 min so users never pay Athena latency.
+  # ------------------------------------------------------------------
+  CacheWarmerSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: kiro-dashboard-cache-warmer
+      ScheduleExpression: rate(15 minutes)
+      State: ENABLED
+      Targets:
+        - Id: warmer
+          Arn: !GetAtt ApiFunction.Arn
+          Input: '{"ktd_warm": true}'
+
+  CacheWarmerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CacheWarmerSchedule.Arn
+
+  # ------------------------------------------------------------------
+  # DORA GitHub sync — hourly PR snapshot for the DORA tab
+  # ------------------------------------------------------------------
+  DoraSyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kiro-dashboard-dora-sync-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DoraSyncLeastPrivilege
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadPolicyWriteSnapshot
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource:
+                  - !Sub arn:aws:s3:::${LogBucketName}/kiro/policy/*
+                  - !Sub arn:aws:s3:::${LogBucketName}/kiro/dora/*
+              - !If
+                - HasKmsKey
+                - Sid: KmsForBucket
+                  Effect: Allow
+                  Action: [kms:Decrypt, kms:GenerateDataKey]
+                  Resource: !Ref LogBucketKmsKeyArn
+                - !Ref AWS::NoValue
+              - Sid: GithubTokenRead
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/kiro-dashboard/github-token
+              - Sid: Logs
+                Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kiro-dashboard-dora-sync*
+
+  DoraSyncFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: kiro-dashboard-dora-sync
+      Runtime: python3.12
+      Handler: dora_sync.lambda_handler
+      MemorySize: 256
+      Timeout: 300
+      ReservedConcurrentExecutions: 1
+      Role: !GetAtt DoraSyncRole.Arn
+      Environment:
+        Variables:
+          LOG_BUCKET: !Ref LogBucketName
+          POLICY_PREFIX: kiro/policy/
+          DORA_PREFIX: kiro/dora/
+          GITHUB_TOKEN_PARAM: /kiro-dashboard/github-token
+          LOOKBACK_DAYS: '120'
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"status": "placeholder; deploy.sh uploads the real code"}
+
+  DoraSyncSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: kiro-dashboard-dora-sync-hourly
+      ScheduleExpression: cron(18 * * * ? *)   # hh:18 hourly, off the :00 herd
+      State: ENABLED
+      Targets:
+        - Id: dora-sync
+          Arn: !GetAtt DoraSyncFunction.Arn
+
+  DoraSyncInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DoraSyncFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DoraSyncSchedule.Arn
+
+  # ------------------------------------------------------------------
+  # Governance scanner — scheduled Athena checks -> SNS
+  # ------------------------------------------------------------------
+  ScannerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kiro-dashboard-scanner-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ScannerLeastPrivilege
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                Resource: !Sub arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${WorkgroupName}
+              - Effect: Allow
+                Action: [glue:GetDatabase, glue:GetTable, glue:GetTables, glue:GetPartitions]
+                Resource:
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${DatabaseName}
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${DatabaseName}/*
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !Sub arn:aws:s3:::${LogBucketName}
+                  - !Sub arn:aws:s3:::${LogBucketName}/*
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetBucketLocation]
+                Resource:
+                  - !Sub arn:aws:s3:::${LogBucketName}
+                  - !Sub arn:aws:s3:::${LogBucketName}/${AthenaResultsPrefix}*
+              - !If
+                - HasKmsKey
+                - Effect: Allow
+                  Action: [kms:Decrypt, kms:GenerateDataKey]
+                  Resource: !Ref LogBucketKmsKeyArn
+                - !Ref AWS::NoValue
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref AlarmTopic
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kiro-dashboard-scanner*
+
+  ScannerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: kiro-dashboard-scanner
+      Runtime: python3.12
+      Handler: scanner.lambda_handler
+      MemorySize: 128
+      Timeout: 300
+      ReservedConcurrentExecutions: 1
+      Role: !GetAtt ScannerRole.Arn
+      Environment:
+        Variables:
+          DATABASE: !Ref DatabaseName
+          WORKGROUP: !Ref WorkgroupName
+          SNS_TOPIC_ARN: !Ref AlarmTopic
+          OUTPUT_LOCATION: !Sub s3://${LogBucketName}/${AthenaResultsPrefix}
+          LOOKBACK_HOURS: '24'
+          BUDGET_ALERT_PCT: '80'
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"status": "placeholder; deploy.sh uploads the real code"}
+
+  ScannerSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: kiro-dashboard-scanner-daily
+      ScheduleExpression: cron(30 2 * * ? *)   # 02:30 UTC, after the 01:00 identity sync
+      State: ENABLED
+      Targets:
+        - Id: scanner
+          Arn: !GetAtt ScannerFunction.Arn
+
+  ScannerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ScannerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScannerSchedule.Arn
+
+  # ------------------------------------------------------------------
+  # Operational alarms
+  # ------------------------------------------------------------------
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: kiro-dashboard-alarms
+
+  AlarmSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: kiro-dashboard-api-errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{Name: FunctionName, Value: !Ref ApiFunction}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+
+  Api5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: kiro-dashboard-api-5xx
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions: [{Name: ApiId, Value: !Ref HttpApi}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  CognitoDomain:
+    Value: !Sub ${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com
+  ApiEndpoint:
+    Description: Regional endpoint; CloudFront origin for /api/* (not for direct use).
+    Value: !Sub ${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+  ApiFunctionName:
+    Value: !Ref ApiFunction
+  AlarmTopicArn:
+    Value: !Ref AlarmTopic
