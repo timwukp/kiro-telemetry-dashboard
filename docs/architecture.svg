@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 460" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" role="img" aria-label="Kiro Telemetry Dashboard architecture: a browser SPA served by CloudFront authenticates with Cognito, calls API Gateway to a Lambda that reads a materialized S3 cache refreshed on schedule from Athena; scheduled Lambdas handle DORA GitHub sync and governance alerting.">
+  <title>Kiro Telemetry Dashboard — architecture</title>
+  <style>
+    .surface  { fill: #fcfcfb; }
+    .node     { fill: #f9f9f7; stroke: rgba(11,11,11,0.18); stroke-width: 1; }
+    .node-acc { fill: #f9f9f7; stroke: #2a78d6; stroke-width: 1.5; }
+    .label    { fill: #0b0b0b; font-size: 14px; font-weight: 600; }
+    .sub      { fill: #898781; font-size: 11px; }
+    .lane     { fill: #898781; font-size: 10.5px; letter-spacing: 0.08em; }
+    .flow     { stroke: #2a78d6; stroke-width: 2; fill: none;
+                stroke-dasharray: 7 5; animation: dash 1.3s linear infinite; }
+    .flow2    { stroke: #1baf7a; stroke-width: 1.5; fill: none;
+                stroke-dasharray: 5 5; animation: dash 1.8s linear infinite; }
+    .alert    { stroke: #eb6834; stroke-width: 1.5; fill: none;
+                stroke-dasharray: 5 5; animation: dash 1.8s linear infinite; }
+    .pulse    { animation: pulse 2.4s ease-in-out infinite; }
+    @keyframes dash  { to { stroke-dashoffset: -12; } }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+    @media (prefers-reduced-motion: reduce) {
+      .flow, .flow2, .alert { animation: none; }
+      .pulse { animation: none; }
+    }
+    @media (prefers-color-scheme: dark) {
+      .surface  { fill: #1a1a19; }
+      .node     { fill: #0d0d0d; stroke: rgba(255,255,255,0.18); }
+      .node-acc { fill: #0d0d0d; stroke: #3987e5; }
+      .label    { fill: #ffffff; }
+      .flow     { stroke: #3987e5; }
+      .flow2    { stroke: #199e70; }
+      .alert    { stroke: #d95926; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L8,4 L0,8 z" fill="#898781"/>
+    </marker>
+  </defs>
+
+  <rect class="surface" x="0" y="0" width="1000" height="460" rx="12"/>
+
+  <text class="lane" x="24" y="52">SERVE (user path — never waits on Athena)</text>
+  <text class="lane" x="24" y="212">DATA &amp; CACHE</text>
+  <text class="lane" x="24" y="352">SCHEDULED (EventBridge)</text>
+
+  <!-- ══ Lane A (y=64): Browser -> CloudFront -> API GW -> Lambda ══ -->
+  <path class="flow" d="M164,92 L240,92" marker-end="url(#arrow)"/>
+  <path class="flow" d="M374,92 L450,92" marker-end="url(#arrow)"/>
+  <path class="flow" d="M584,92 L660,92" marker-end="url(#arrow)"/>
+  <!-- CloudFront -> Cognito (auth, down-left corridor x=210) -->
+  <path class="flow2" d="M275,120 L275,160 L160,160 L160,224" marker-end="url(#arrow)"/>
+  <!-- Lambda -> S3 cache (straight down) -->
+  <path class="flow" d="M725,120 L725,224" marker-end="url(#arrow)"/>
+
+  <!-- ══ Lane B (y=224): Cognito | S3 cache <- Athena <- Glue/S3 lake ══ -->
+  <path class="flow2" d="M584,252 L660,252" marker-end="url(#arrow)"/>
+  <path class="flow2" d="M374,252 L450,252" marker-end="url(#arrow)"/>
+
+  <!-- ══ Lane C (y=364): warmer -> Athena (up at x=517); dora-sync -> lake (up at x=307); scanner -> SNS -->
+  <path class="flow2" d="M517,364 L517,280" marker-end="url(#arrow)"/>
+  <path class="flow2" d="M307,364 L307,280" marker-end="url(#arrow)"/>
+  <path class="alert" d="M780,364 L780,338 L806,338" marker-end="url(#arrow)"/>
+
+  <!-- Lane A nodes -->
+  <g>
+    <rect class="node" x="34" y="64" width="130" height="56" rx="10"/>
+    <text class="label" x="99" y="88" text-anchor="middle">Browser SPA</text>
+    <text class="sub"   x="99" y="106" text-anchor="middle">10 tabs, no framework</text>
+  </g>
+  <g>
+    <rect class="node-acc" x="240" y="64" width="134" height="56" rx="10"/>
+    <text class="label" x="307" y="88" text-anchor="middle">CloudFront</text>
+    <text class="sub"   x="307" y="106" text-anchor="middle">OAC + CSP/HSTS</text>
+  </g>
+  <g>
+    <rect class="node" x="450" y="64" width="134" height="56" rx="10"/>
+    <text class="label" x="517" y="88" text-anchor="middle">API Gateway</text>
+    <text class="sub"   x="517" y="106" text-anchor="middle">JWT authorizer</text>
+  </g>
+  <g>
+    <rect class="node-acc" x="660" y="64" width="130" height="56" rx="10"/>
+    <circle class="pulse" cx="776" cy="76" r="4" fill="#0ca30c"/>
+    <text class="label" x="725" y="88" text-anchor="middle">Lambda API</text>
+    <text class="sub"   x="725" y="106" text-anchor="middle">named queries only</text>
+  </g>
+
+  <!-- Lane B nodes -->
+  <g>
+    <rect class="node" x="93" y="224" width="134" height="56" rx="10"/>
+    <text class="label" x="160" y="248" text-anchor="middle">Cognito</text>
+    <text class="sub"   x="160" y="266" text-anchor="middle">admin-only + PKCE</text>
+  </g>
+  <g>
+    <rect class="node" x="240" y="224" width="134" height="56" rx="10"/>
+    <text class="label" x="307" y="248" text-anchor="middle">S3 data lake</text>
+    <text class="sub"   x="307" y="266" text-anchor="middle">Kiro telemetry + policy</text>
+  </g>
+  <g>
+    <rect class="node" x="450" y="224" width="134" height="56" rx="10"/>
+    <text class="label" x="517" y="248" text-anchor="middle">Athena + Glue</text>
+    <text class="sub"   x="517" y="266" text-anchor="middle">governance views</text>
+  </g>
+  <g>
+    <rect class="node-acc" x="660" y="224" width="130" height="56" rx="10"/>
+    <circle class="pulse" cx="776" cy="236" r="4" fill="#0ca30c"/>
+    <text class="label" x="725" y="248" text-anchor="middle">S3 cache</text>
+    <text class="sub"   x="725" y="266" text-anchor="middle">materialized, ~1.4s loads</text>
+  </g>
+
+  <!-- Lane C nodes -->
+  <g>
+    <rect class="node" x="240" y="364" width="134" height="56" rx="10"/>
+    <text class="label" x="307" y="388" text-anchor="middle">dora-sync λ</text>
+    <text class="sub"   x="307" y="406" text-anchor="middle">GitHub PRs, hourly</text>
+  </g>
+  <g>
+    <rect class="node" x="450" y="364" width="134" height="56" rx="10"/>
+    <text class="label" x="517" y="388" text-anchor="middle">cache warmer λ</text>
+    <text class="sub"   x="517" y="406" text-anchor="middle">all tabs, every 15 min</text>
+  </g>
+  <g>
+    <rect class="node" x="660" y="364" width="240" height="56" rx="10"/>
+    <text class="label" x="780" y="388" text-anchor="middle">governance scanner λ</text>
+    <text class="sub"   x="780" y="406" text-anchor="middle">keywords · after-hours · budget</text>
+  </g>
+  <g>
+    <rect class="node-acc" x="806" y="310" width="112" height="48" rx="10"/>
+    <text class="label" x="862" y="330" text-anchor="middle">SNS</text>
+    <text class="sub"   x="862" y="346" text-anchor="middle">alerts out</text>
+  </g>
+</svg>
