@@ -1,7 +1,9 @@
-/* Architecture diagram — hand-laid SVG on a 3-lane grid so no connector
-   ever crosses another (verified geometrically in tests + by rendered
-   screenshot). Node status comes from /api/health; flow lines animate via
-   CSS dash offset (disabled under prefers-reduced-motion). */
+/* Architecture diagram — mirrors docs/architecture.svg: three lanes
+   (SERVE / DATA & CACHE / SCHEDULED). Nodes carry live health from
+   /api/health; edges are explicit polylines (single source of truth —
+   tests/test_arch_geometry.py parses NODES/EDGES from this file and
+   verifies no edge crosses another or passes through an unrelated node).
+   Flow lines animate via CSS dash offset (off under reduced motion). */
 
 'use strict';
 
@@ -13,78 +15,52 @@ const Arch = (() => {
     return n;
   };
 
-  /* Layout: 1000x360 viewBox, three horizontal lanes.
-     Lane A (y=60):  Kiro clients -> S3 data lake -> Glue -> Athena
-     Lane B (y=200): Browser -> CloudFront -> API GW -> Lambda -> (up to Athena)
-     Lane C (y=320): Cognito (under CloudFront/APIGW), SNS (under Lambda)
-     Every edge is either horizontal within a lane or a single vertical
-     drop between adjacent lanes at distinct x positions — no crossings. */
+  /* viewBox 1000x470. Lanes: A y=64 (serve), B y=224 (data & cache),
+     C y=364 (scheduled). All positions mirror docs/architecture.svg. */
   const NODES = [
-    { id: 'kiro',   x: 30,  y: 30,  w: 130, h: 56, label: 'Kiro IDE/CLI', sub: 'telemetry writers', health: null },
-    { id: 's3',     x: 240, y: 30,  w: 130, h: 56, label: 'S3 data lake', sub: 'prompt+usage logs', health: 'prompt_logs' },
-    { id: 'glue',   x: 450, y: 30,  w: 130, h: 56, label: 'Glue Catalog', sub: 'partition projection', health: 'user_reports' },
-    { id: 'athena', x: 660, y: 30,  w: 130, h: 56, label: 'Athena', sub: 'kiro-governance WG', health: null },
-    { id: 'idsync', x: 850, y: 30,  w: 120, h: 56, label: 'Identity sync', sub: 'daily 01:00 UTC', health: 'identity_mapping' },
+    { id: 'browser', x: 34,  y: 64,  w: 130, h: 56, label: 'Browser SPA', sub: '11 tabs, no framework', health: null },
+    { id: 'cf',      x: 240, y: 64,  w: 134, h: 56, label: 'CloudFront', sub: 'OAC + CSP/HSTS', health: null, acc: true },
+    { id: 'apigw',   x: 450, y: 64,  w: 134, h: 56, label: 'API Gateway', sub: 'JWT authorizer', health: null },
+    { id: 'lambda',  x: 660, y: 64,  w: 130, h: 56, label: 'Lambda API', sub: 'named queries only', health: 'api_lambda', acc: true },
 
-    { id: 'browser',x: 30,  y: 170, w: 130, h: 56, label: 'Browser SPA', sub: 'this dashboard', health: null },
-    { id: 'cf',     x: 240, y: 170, w: 130, h: 56, label: 'CloudFront', sub: 'OAC + CSP/HSTS', health: null },
-    { id: 'apigw',  x: 450, y: 170, w: 130, h: 56, label: 'API Gateway', sub: 'JWT authorizer', health: null },
-    { id: 'lambda', x: 660, y: 170, w: 130, h: 56, label: 'Lambda API', sub: 'named queries only', health: 'api_lambda' },
+    { id: 'cognito', x: 93,  y: 224, w: 134, h: 56, label: 'Cognito', sub: 'admin-only + PKCE', health: null },
+    { id: 's3lake',  x: 240, y: 224, w: 134, h: 56, label: 'S3 data lake', sub: 'Kiro telemetry + policy', health: 'prompt_logs' },
+    { id: 'athena',  x: 450, y: 224, w: 134, h: 56, label: 'Athena + Glue', sub: 'governance views', health: 'user_reports' },
+    { id: 's3cache', x: 660, y: 224, w: 130, h: 56, label: 'S3 cache', sub: 'materialized, ~1.4s loads', health: 'policy_registry', acc: true },
 
-    { id: 'cognito',x: 240, y: 290, w: 130, h: 50, label: 'Cognito', sub: 'admin-only + PKCE', health: null },
-    { id: 'policy', x: 450, y: 290, w: 130, h: 50, label: 'Policy registry', sub: 'S3 kiro/policy/', health: 'policy_registry' },
-    { id: 'sns',    x: 660, y: 290, w: 130, h: 50, label: 'SNS alerts', sub: 'governance scanner', health: null },
+    { id: 'dora',    x: 240, y: 364, w: 134, h: 56, label: 'dora-sync λ', sub: 'GitHub PRs, hourly', health: null },
+    { id: 'warmer',  x: 450, y: 364, w: 134, h: 56, label: 'cache warmer λ', sub: 'all tabs, every 15 min', health: null },
+    { id: 'scanner', x: 660, y: 364, w: 240, h: 56, label: 'governance scanner λ', sub: 'keywords · after-hours · budget', health: 'identity_mapping' },
+    { id: 'sns',     x: 806, y: 296, w: 112, h: 48, label: 'SNS', sub: 'alerts out', health: null, acc: true },
   ];
 
-  /* Edges as [from, to, kind]; kind 'flow' animates. Routed to avoid all
-     crossings: lane-internal edges are straight horizontals; inter-lane
-     edges are single verticals at the source node's center x. */
+  /* Edges as explicit polylines: { pts: [[x,y]...], kind } — kinds map to
+     CSS classes (flow = blue user path, flow2 = green data/auth path,
+     alert = orange alert path). */
   const EDGES = [
-    ['kiro', 's3', 'flow'], ['s3', 'glue', 'flow'], ['glue', 'athena', 'flow'],
-    ['idsync', 's3', 'ctl'],       // vertical? no — same lane, right to left horizontal above
-    ['browser', 'cf', 'flow'], ['cf', 'apigw', 'flow'], ['apigw', 'lambda', 'flow'],
-    ['lambda', 'athena', 'vert'],  // vertical up at lambda center x
-    ['cf', 'cognito', 'vert'],     // vertical down
-    ['lambda', 'policy', 'vertdiag'], // vertical down then left along lane C top
-    ['lambda', 'sns', 'vert'],
+    { pts: [[164, 92], [240, 92]],   kind: 'flow' },   // browser -> cf
+    { pts: [[374, 92], [450, 92]],   kind: 'flow' },   // cf -> apigw
+    { pts: [[584, 92], [660, 92]],   kind: 'flow' },   // apigw -> lambda
+    { pts: [[275, 120], [275, 160], [160, 160], [160, 224]], kind: 'flow2' }, // cf -> cognito (auth)
+    { pts: [[725, 120], [725, 224]], kind: 'flow' },   // lambda -> s3 cache
+    { pts: [[374, 252], [450, 252]], kind: 'flow2' },  // s3 lake -> athena
+    { pts: [[584, 252], [660, 252]], kind: 'flow2' },  // athena -> s3 cache
+    { pts: [[307, 364], [307, 280]], kind: 'flow2' },  // dora-sync -> s3 lake
+    { pts: [[517, 364], [517, 280]], kind: 'flow2' },  // warmer -> athena
+    { pts: [[780, 364], [780, 320], [806, 320]], kind: 'alert' }, // scanner -> sns
   ];
 
-  function center(n) { return { cx: n.x + n.w / 2, cy: n.y + n.h / 2 }; }
-  function byId(id) { return NODES.find(n => n.id === id); }
-
-  function edgePath(a, b, kind) {
-    const A = byId(a), B = byId(b);
-    const ac = center(A), bc = center(B);
-    if (kind === 'flow') {
-      // horizontal within a lane: right edge of A to left edge of B
-      if (A.x < B.x) return `M${A.x + A.w},${ac.cy} L${B.x},${bc.cy}`;
-      return `M${A.x},${ac.cy} L${B.x + B.w},${bc.cy}`;
-    }
-    if (kind === 'ctl') {
-      // right-to-left over the top corridor (y=12) so the line clears the
-      // nodes between A and B (verified by tests/test_arch_geometry.py)
-      const topY = 12;
-      return `M${ac.cx},${A.y} L${ac.cx},${topY} L${bc.cx},${topY} L${bc.cx},${B.y}`;
-    }
-    if (kind === 'vert') {
-      // vertical between lanes at shared center x (nodes are grid-aligned)
-      if (ac.cy < bc.cy) return `M${ac.cx},${A.y + A.h} L${ac.cx},${B.y}`;
-      return `M${ac.cx},${A.y} L${ac.cx},${B.y + B.h}`;
-    }
-    // vertdiag: drop from A bottom, then horizontal into B's right side
-    // (used lambda->policy: x 725 -> 580). One bend, below lane B and
-    // above lane C — the corridor is empty, so nothing to cross.
-    const midY = 270;
-    return `M${ac.cx},${A.y + A.h} L${ac.cx},${midY} L${B.x + B.w},${midY} L${B.x + B.w},${bc.cy} `
-         + `M${B.x + B.w},${bc.cy} L${B.x + B.w},${bc.cy}`;
-  }
+  const LANES = [
+    { y: 52,  label: 'SERVE (user path — never waits on Athena)' },
+    { y: 212, label: 'DATA & CACHE' },
+    { y: 352, label: 'SCHEDULED (EventBridge)' },
+  ];
 
   function render(container, health) {
     const box = document.createElement('div');
     box.className = 'chart-box arch';
-    const svg = el('svg', { viewBox: '0 0 1000 360', role: 'img' });
+    const svg = el('svg', { viewBox: '0 0 1000 470', role: 'img' });
 
-    // defs: arrowhead
     const defs = el('defs');
     const marker = el('marker', {
       id: 'arrow', viewBox: '0 0 8 8', refX: 7, refY: 4,
@@ -94,13 +70,17 @@ const Arch = (() => {
     defs.appendChild(marker);
     svg.appendChild(defs);
 
-    for (const [a, b, kind] of EDGES) {
-      const p = el('path', {
-        d: edgePath(a, b, kind),
-        class: kind === 'flow' ? 'arch-edge arch-flow' : 'arch-edge',
-        'marker-end': 'url(#arrow)',
-      });
-      svg.appendChild(p);
+    for (const lane of LANES) {
+      const t = el('text', { x: 24, y: lane.y, class: 'arch-lane' });
+      t.textContent = lane.label;
+      svg.appendChild(t);
+    }
+
+    for (const e of EDGES) {
+      const d = e.pts.map((p, i) => `${i ? 'L' : 'M'}${p[0]},${p[1]}`).join(' ');
+      svg.appendChild(el('path', {
+        d, class: `arch-edge arch-${e.kind}`, 'marker-end': 'url(#arrow)',
+      }));
     }
 
     const tooltip = document.getElementById('tooltip');
@@ -110,11 +90,12 @@ const Arch = (() => {
       const ok = status ? status.ok : null;
       g.appendChild(el('rect', {
         x: n.x, y: n.y, width: n.w, height: n.h, rx: 10,
-        class: 'arch-rect' + (ok === false ? ' arch-bad' : ''),
+        class: 'arch-rect' + (n.acc ? ' arch-acc' : '') + (ok === false ? ' arch-bad' : ''),
       }));
-      const t1 = el('text', { x: n.x + n.w / 2, y: n.y + 24, 'text-anchor': 'middle', class: 'arch-label' });
+      const midY = n.y + n.h / 2;
+      const t1 = el('text', { x: n.x + n.w / 2, y: midY - 4, 'text-anchor': 'middle', class: 'arch-label' });
       t1.textContent = n.label;
-      const t2 = el('text', { x: n.x + n.w / 2, y: n.y + 42, 'text-anchor': 'middle', class: 'arch-sub' });
+      const t2 = el('text', { x: n.x + n.w / 2, y: midY + 14, 'text-anchor': 'middle', class: 'arch-sub' });
       t2.textContent = n.sub;
       g.appendChild(t1); g.appendChild(t2);
       if (ok !== null) {
@@ -142,6 +123,6 @@ const Arch = (() => {
     container.appendChild(box);
   }
 
-  // exposed for the offline geometry test (no DOM needed)
-  return { render, _layout: { NODES, EDGES, edgePath } };
+  // exposed for the offline geometry test
+  return { render, _layout: { NODES, EDGES } };
 })();
