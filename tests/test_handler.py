@@ -143,7 +143,37 @@ class TestPolicyRoutes(unittest.TestCase):
         body = json.loads(resp["body"])
         self.assertEqual(body["version"], 1)
         self.assertEqual(body["updated_by"], "admin@test")
-        s3.put_object.assert_called_once()
+        # two writes: policy.json + the materialized user-project.csv
+        keys = [c.kwargs["Key"] for c in s3.put_object.call_args_list]
+        self.assertIn("kiro/policy/policy.json", keys)
+        self.assertTrue(any(k.endswith("user-project/user-project.csv") for k in keys))
+
+    def test_policy_put_rejects_csv_injection_in_mappings(self):
+        payload = {"mcp_allowlist": {}, "steering_files": [],
+                   "org_mappings": {"rows": [
+                       {"userid": "u1", "team": 'evil",team', "project": "p", "cost_center": "c"}]}}
+        resp = handler.lambda_handler(
+            self._event(method="PUT", body=payload, groups="[admins]"), None)
+        self.assertEqual(resp["statusCode"], 400)
+
+    def test_policy_put_writes_mapping_csv(self):
+        s3 = mock.MagicMock()
+        class NoSuchKey(Exception):
+            pass
+        s3.exceptions.NoSuchKey = NoSuchKey
+        s3.get_object.side_effect = NoSuchKey()
+        payload = {"mcp_allowlist": {}, "steering_files": [],
+                   "org_mappings": {"rows": [
+                       {"userid": "u-1", "team": "Platform Engineering",
+                        "project": "kiro-telemetry-dashboard", "cost_center": "CC-4501"}]}}
+        with mock.patch.object(handler, "_s3", s3):
+            resp = handler.lambda_handler(
+                self._event(method="PUT", body=payload, groups="[admins]"), None)
+        self.assertEqual(resp["statusCode"], 200)
+        csv_call = next(c for c in s3.put_object.call_args_list
+                        if c.kwargs["Key"].endswith("user-project.csv"))
+        body = csv_call.kwargs["Body"].decode()
+        self.assertIn("u-1,Platform Engineering,kiro-telemetry-dashboard,CC-4501", body)
 
     def test_policy_put_rejects_path_traversal_steering_name(self):
         payload = {"mcp_allowlist": {},
