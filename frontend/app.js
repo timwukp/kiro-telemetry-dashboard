@@ -153,9 +153,63 @@
     },
 
     productivity(data) {
-      Charts.line(card('AI-generated code lines per day', 'Chat + inline, from by_user_analytic'),
+      const stages = rowsOf(data, 'prod_adoption_stages')[0] || [];
+      const agentic = rowsOf(data, 'prod_agentic_kpis')[0] || [];
+      const [sugg, accepts, chatMsgs, aiLines] = stages.map(Number);
+      const [autoMsgs, totalMsgs] = agentic.map(Number);
+      const agenticShare = totalMsgs > 0 ? (100 * autoMsgs / totalMsgs) : 0;
+
+      // Adoption-maturity strip: which stage of the AI-coding curve is this
+      // org on? Stage metrics are all real telemetry, zero = honest zero.
+      const strip = card('AI adoption maturity',
+        'Three stages of AI-assisted development — where this window\'s usage sits.', 'full');
+      const stagesEl = document.createElement('div');
+      stagesEl.className = 'maturity-strip';
+      const items = [
+        { n: 1, t: 'Inline completion', d: 'passive suggestions in the IDE',
+          v: sugg > 0 ? `${fmtN(accepts)}/${fmtN(sugg)} accepted (${(100 * accepts / sugg).toFixed(0)}%)` : 'not used in window',
+          active: sugg > 0 },
+        { n: 2, t: 'Chat assistance', d: 'asking, getting code back',
+          v: chatMsgs > 0 ? `${fmtN(chatMsgs)} messages · ${fmtN(aiLines)} AI code lines` : 'not used in window',
+          active: chatMsgs > 0 },
+        { n: 3, t: 'Agentic delegation', d: 'agents work autonomously',
+          v: totalMsgs > 0 ? `${agenticShare.toFixed(0)}% of ${fmtN(totalMsgs)} messages are agent-automated` : 'no activity',
+          active: agenticShare > 30 },
+      ];
+      const dominant = items.filter(i => i.active).length ? Math.max(...items.map((i, x) => i.active ? x : -1)) : -1;
+      items.forEach((it, i) => {
+        const s = document.createElement('div');
+        s.className = 'maturity-stage' + (i === dominant ? ' dominant' : it.active ? ' active' : '');
+        const num = document.createElement('div'); num.className = 'm-num'; num.textContent = it.n;
+        const tt = document.createElement('div'); tt.className = 'm-title'; tt.textContent = it.t;
+        const dd = document.createElement('div'); dd.className = 'm-sub'; dd.textContent = it.d;
+        const vv = document.createElement('div'); vv.className = 'm-val'; vv.textContent = it.v;
+        s.append(num, tt, dd, vv);
+        stagesEl.appendChild(s);
+      });
+      strip.appendChild(stagesEl);
+
+      // Smart empty-state: IDE metrics all zero but usage exists => the org
+      // has moved past stages 1-2; say so instead of showing dead charts.
+      const ideDead = aiLines === 0 && sugg === 0 && (chatMsgs > 0 || totalMsgs > 0);
+      if (ideDead) {
+        const note = card('IDE productivity metrics — not applicable this window',
+          '', 'full');
+        const p = document.createElement('p');
+        p.className = 'sub';
+        p.style.fontSize = '13px';
+        p.textContent =
+          `All usage in this window came through CLI / agentic workflows (stage 3) — ` +
+          `${fmtN(chatMsgs)} chat messages were sent, but inline suggestions and chat code-line ` +
+          `counters only tick in the Kiro IDE. Zero here means the usage mode has matured past ` +
+          `IDE assistance, not that usage dropped. For agentic-mode outcomes, see the DORA tab ` +
+          `(AI-assisted PRs, merge speed) and the automation share on Usage & Adoption.`;
+        note.appendChild(p);
+      }
+
+      Charts.line(card('AI-generated code lines per day', 'Chat + inline (IDE modes) — see maturity strip if zero'),
         rowsOf(data, 'prod_ai_code_lines_daily'), { name: 'lines' });
-      Charts.line(card('Inline suggestion acceptance rate', '% accepted of suggestions shown'),
+      Charts.line(card('Inline suggestion acceptance rate', '% accepted of suggestions shown (IDE stage 1)'),
         rowsOf(data, 'prod_inline_acceptance_daily'), { name: '%', unit: '%' });
       Charts.donut(card('AI output by source', 'Where accepted AI code comes from'),
         rowsOf(data, 'prod_output_mix'), { name: 'lines' });
@@ -309,6 +363,22 @@
     },
 
     cost(data) {
+      const cov = rowsOf(data, 'cost_mapping_coverage')[0] || [];
+      const [totCr, mapCr, totU, mapU] = cov.map(Number);
+      const covPct = totCr > 0 ? (100 * mapCr / totCr) : 0;
+      tileCard('Total credits', fmtN(totCr));
+      tileCard('Allocated to org units', covPct.toFixed(0) + '%',
+        covPct >= 90 ? { kind: 'good', text: 'chargeback-ready' }
+                     : { kind: 'bad', text: 'map users on the Policy tab' });
+      tileCard('Users mapped', `${fmtN(mapU)} / ${fmtN(totU)}`);
+      tileCard('Unallocated credits', fmtN(totCr - mapCr),
+        (totCr - mapCr) > 0 ? { kind: 'bad', text: 'UNMAPPED bucket' } : { kind: 'good', text: 'fully allocated' });
+      Charts.table(
+        card('Cost allocation', 'Chargeback rollup: team ← Jira (reserved connector) · project ← repo · cost center ← department. Manage mappings on the Policy tab.', 'full'),
+        ['Team', 'Project', 'Cost center', 'Users', 'Credits'],
+        rowsOf(data, 'cost_allocation_table'),
+        { pills: { 0: (v) => v === 'UNMAPPED' ? 'crit' : 'warn' } },
+      );
       Charts.donut(card('Credits by subscription tier', 'Where spend concentrates'),
         rowsOf(data, 'cost_by_tier'), { name: 'credits' });
       Charts.line(card('Overage credits trend', 'Credits beyond plan allowance per day'),
