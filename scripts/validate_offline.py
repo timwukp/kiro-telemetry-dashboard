@@ -124,9 +124,11 @@ auth_js = open(os.path.join(ROOT, "frontend/auth.js")).read()
 charts_js = open(os.path.join(ROOT, "frontend/charts.js")).read()
 index_html = open(os.path.join(ROOT, "frontend/index.html")).read()
 
-renderer_tabs = set(re.findall(r"^\s{4}(\w+)\(data\)", app_js, re.M))
+# renderers live inside `const RENDERERS = { ... };` — scope the scan there
+_rblock = re.search(r"const RENDERERS = \{(.*?)\n  \};", app_js, re.S)
+renderer_tabs = set(re.findall(r"^\s{4}(\w+)\((?:data)?\)", _rblock.group(1) if _rblock else "", re.M))
 # architecture + policy use special (non-days) endpoints handled in-handler
-SPECIAL_TABS = {"architecture", "policy"}
+SPECIAL_TABS = {"architecture", "policy", "intro"}
 check("frontend: renderer per endpoint",
       renderer_tabs == set(queries.ENDPOINTS) | SPECIAL_TABS,
       f"renderers {renderer_tabs} vs endpoints {set(queries.ENDPOINTS)} + {SPECIAL_TABS}")
@@ -177,7 +179,7 @@ check("frontend: no eval/Function anywhere",
       not re.search(r"\beval\(|new Function\(", app_js + auth_js + charts_js))
 check("frontend: no inline scripts in index.html", "<script>" not in index_html)
 check("frontend: no third-party script tags",
-      not re.search(r'<script[^>]+src="(?!config\.js|auth\.js|charts\.js|arch\.js|policy\.js|app\.js)', index_html))
+      not re.search(r'<script[^>]+src="(?!config\.js|auth\.js|charts\.js|arch\.js|intro\.js|policy\.js|app\.js)', index_html))
 
 # tooltip innerHTML: only reachable with server-shaped strings; charts.table
 # must use textContent for arbitrary data (audit trail prompt_text).
