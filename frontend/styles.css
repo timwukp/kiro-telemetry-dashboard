@@ -171,7 +171,7 @@ button.primary:hover { filter: brightness(1.08); }
 .range button.active { background: var(--series-1); color: #fff; }
 
 /* ---- layout ---- */
-main { padding: 20px; max-width: 1400px; margin: 0 auto; }
+main { padding: 20px 24px; }
 .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
 .card {
   background: var(--surface-1); border: 1px solid var(--border);
@@ -263,12 +263,11 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .range button { padding: 10px 14px; }
 }
 
-/* very large screens: allow 3-up cards */
-@media (min-width: 1600px) {
-  main { max-width: 1560px; }
+/* wide screens: denser grid — 3-up cards, 6-up tiles */
+@media (min-width: 1500px) {
   .card { grid-column: span 4; }
   .card.full { grid-column: span 12; }
-  .tile { grid-column: span 3; }
+  .tile { grid-column: span 2; }
 }
 
 /* reduced motion preference */
@@ -278,7 +277,7 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 
 /* ---- architecture diagram ---- */
-.arch svg { max-width: 1000px; margin: 0 auto; }
+.arch svg { width: 100%; height: auto; }
 .arch-rect { fill: var(--page); stroke: var(--border); stroke-width: 1; }
 .arch-rect.arch-bad { stroke: var(--status-critical); stroke-width: 2; }
 .arch-node { cursor: pointer; }
