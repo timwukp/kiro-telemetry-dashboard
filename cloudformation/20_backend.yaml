@@ -34,6 +34,13 @@ Parameters:
     Type: String
     Default: ''
     Description: Optional email for operational alarms. Blank to skip.
+  AllowedSignupDomains:
+    Type: String
+    Default: ''
+    Description: >
+      Comma-separated email domains allowed to SELF-SIGN-UP (e.g.
+      "amazon.com"). Blank disables self-signup entirely (admin-created
+      users only). Signups still require the emailed verification code.
   LogBucketKmsKeyArn:
     Type: String
     Default: ''
@@ -44,18 +51,72 @@ Parameters:
 Conditions:
   HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
   HasKmsKey: !Not [!Equals [!Ref LogBucketKmsKeyArn, '']]
+  SelfSignupEnabled: !Not [!Equals [!Ref AllowedSignupDomains, '']]
 
 Resources:
 
   # ------------------------------------------------------------------
   # Cognito — admin-created users only, strong passwords, optional MFA
   # ------------------------------------------------------------------
+  PreSignupRole:
+    Type: AWS::IAM::Role
+    Condition: SelfSignupEnabled
+    Properties:
+      RoleName: kiro-dashboard-presignup-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LogsOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kiro-dashboard-presignup*
+
+  PreSignupFunction:
+    Type: AWS::Lambda::Function
+    Condition: SelfSignupEnabled
+    Properties:
+      FunctionName: kiro-dashboard-presignup
+      Runtime: python3.12
+      Handler: presignup.lambda_handler
+      MemorySize: 128
+      Timeout: 5
+      Role: !GetAtt PreSignupRole.Arn
+      Environment:
+        Variables:
+          ALLOWED_EMAIL_DOMAINS: !Ref AllowedSignupDomains
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              raise Exception("presignup not deployed yet; deploy.sh uploads the real code")
+
+  PreSignupInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: SelfSignupEnabled
+    Properties:
+      FunctionName: !Ref PreSignupFunction
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
   UserPool:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: kiro-dashboard-users
       AdminCreateUserConfig:
-        AllowAdminCreateUserOnly: true        # no self-signup, ever
+        # Self-signup is gated by the PreSignUp domain-allowlist trigger;
+        # with no AllowedSignupDomains it stays admin-create-only.
+        AllowAdminCreateUserOnly: !If [SelfSignupEnabled, false, true]
+      LambdaConfig: !If
+        - SelfSignupEnabled
+        - PreSignUp: !GetAtt PreSignupFunction.Arn
+        - !Ref AWS::NoValue
       AutoVerifiedAttributes: [email]
       UsernameAttributes: [email]
       MfaConfiguration: OPTIONAL
