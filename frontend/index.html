@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Kiro Telemetry Dashboard</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="login-view" class="center-screen" hidden>
+  <div class="login-card">
+    <h1>Kiro Telemetry Dashboard</h1>
+    <p class="muted">Enterprise governance view of Kiro developer telemetry.</p>
+    <div id="login-error" class="error-banner" hidden></div>
+    <button id="login-btn" class="primary">Sign in with Cognito</button>
+    <p class="muted" style="font-size:12px; margin-top:14px">
+      Amazon employees: use the <b>Sign up</b> link on the sign-in page with
+      your <b>@amazon.com</b> email (verification code sent by email).
+    </p>
+  </div>
+</div>
+
+<div id="app-view" hidden>
+  <!-- SVG icon sprite: stroke-based 18px icons, inherit currentColor -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-intro" viewBox="0 0 24 24"><path d="M8 6l10 6-10 6V6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+      <symbol id="i-arch" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="8.5" y="14" width="7" height="7" rx="1.5"/><path d="M6.5 10v2a2 2 0 0 0 2 2M17.5 10v2a2 2 0 0 1-2 2"/></g></symbol>
+      <symbol id="i-overview" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></g></symbol>
+      <symbol id="i-usage" viewBox="0 0 24 24"><path d="M3 17l5-6 4 3 6-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 21H3V3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-quality" viewBox="0 0 24 24"><path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5L12 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+      <symbol id="i-productivity" viewBox="0 0 24 24"><path d="M13 2L5 13h5l-1 9 8-11h-5l1-9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+      <symbol id="i-security" viewBox="0 0 24 24"><path d="M12 3l8 3v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-cost" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7v10M15 9.5c0-1.4-1.3-2.5-3-2.5s-3 1-3 2.2c0 3.1 6 1.5 6 4.6 0 1.2-1.3 2.2-3 2.2s-3-1.1-3-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-budget" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 12V5.5M12 12l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-dora" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 8a5 5 0 1 1 0 8M7 8L4 5m3 3H4m13 8l3 3m-3-3h3"/><circle cx="12" cy="12" r="2.2"/></g></symbol>
+      <symbol id="i-policy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1" stroke-linecap="round"/></g></symbol>
+      <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="shell">
+    <aside id="sidenav" class="sidenav">
+      <div class="side-brand">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <span class="brand-text">Kiro Telemetry</span>
+        <button id="nav-collapse" title="Collapse navigation" aria-label="Collapse navigation">
+          <svg width="16" height="16"><use href="#i-collapse"/></svg>
+        </button>
+      </div>
+      <nav id="tabs" role="tablist" aria-label="Dashboard sections">
+        <div class="nav-group-label">Get started</div>
+        <button role="tab" data-tab="intro" class="active" title="Introduction">
+          <svg width="18" height="18"><use href="#i-intro"/></svg><span>Introduction</span>
+        </button>
+        <button role="tab" data-tab="architecture" title="Architecture">
+          <svg width="18" height="18"><use href="#i-arch"/></svg><span>Architecture</span>
+        </button>
+        <div class="nav-group-label">Monitor</div>
+        <button role="tab" data-tab="overview" title="Overview">
+          <svg width="18" height="18"><use href="#i-overview"/></svg><span>Overview</span>
+        </button>
+        <button role="tab" data-tab="usage" title="Usage &amp; Adoption">
+          <svg width="18" height="18"><use href="#i-usage"/></svg><span>Usage &amp; Adoption</span>
+        </button>
+        <button role="tab" data-tab="quality" title="Prompt Quality">
+          <svg width="18" height="18"><use href="#i-quality"/></svg><span>Prompt Quality</span>
+        </button>
+        <button role="tab" data-tab="productivity" title="Productivity">
+          <svg width="18" height="18"><use href="#i-productivity"/></svg><span>Productivity</span>
+        </button>
+        <div class="nav-group-label">Govern</div>
+        <button role="tab" data-tab="security" title="Security &amp; Compliance">
+          <svg width="18" height="18"><use href="#i-security"/></svg><span>Security</span>
+        </button>
+        <button role="tab" data-tab="cost" title="Cost Governance">
+          <svg width="18" height="18"><use href="#i-cost"/></svg><span>Cost Governance</span>
+        </button>
+        <button role="tab" data-tab="budget" title="Budget">
+          <svg width="18" height="18"><use href="#i-budget"/></svg><span>Budget</span>
+        </button>
+        <button role="tab" data-tab="dora" title="DORA Metrics">
+          <svg width="18" height="18"><use href="#i-dora"/></svg><span>DORA</span>
+        </button>
+        <button role="tab" data-tab="policy" title="Policy (admin)">
+          <svg width="18" height="18"><use href="#i-policy"/></svg><span>Policy</span>
+        </button>
+      </nav>
+    </aside>
+    <div id="nav-scrim" class="nav-scrim" hidden></div>
+
+    <div class="main-col">
+      <header class="topbar">
+        <button id="nav-open" class="nav-open" title="Menu" aria-label="Open navigation" hidden>
+          <svg width="18" height="18"><use href="#i-menu"/></svg>
+        </button>
+        <span id="page-title" class="page-title">Introduction</span>
+        <div class="controls">
+          <div id="range" class="range" role="group" aria-label="Date range">
+            <button data-days="7">7d</button>
+            <button data-days="30" class="active">30d</button>
+            <button data-days="90">90d</button>
+          </div>
+          <button id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">◐</button>
+          <button id="logout-btn" title="Sign out">Sign out</button>
+        </div>
+      </header>
+
+      <main id="content" class="viz-root">
+        <div id="loading" class="loading" hidden><div class="spinner"></div><span>Querying Athena…</span></div>
+        <div id="error-banner" class="error-banner" hidden></div>
+        <section id="panel" class="grid"></section>
+      </main>
+    </div>
+  </div>
+</div>
+
+<div id="tooltip" class="tooltip" hidden></div>
+
+<script src="config.js"></script>
+<script src="auth.js"></script>
+<script src="charts.js"></script>
+<script src="arch.js"></script>
+<script src="intro.js"></script>
+<script src="policy.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
