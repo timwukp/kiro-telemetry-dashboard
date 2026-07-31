@@ -274,6 +274,29 @@ QUERIES = {
         """,
         ["k", "v"],
     ),
+    "cost_mapping_coverage": (
+        """
+        SELECT
+          ROUND(SUM(credits_used), 2)                                     AS total_credits,
+          ROUND(SUM(CASE WHEN team <> 'UNMAPPED' THEN credits_used ELSE 0 END), 2) AS mapped_credits,
+          COUNT(DISTINCT userid)                                          AS total_users,
+          COUNT(DISTINCT CASE WHEN team <> 'UNMAPPED' THEN userid END)    AS mapped_users
+        FROM {db}.v_user_activity_enriched
+        WHERE """ + _ENRICHED_WINDOW,
+        ["total_credits", "mapped_credits", "total_users", "mapped_users"],
+    ),
+    "cost_allocation_table": (
+        """
+        SELECT team, project, cost_center,
+               COUNT(DISTINCT userid)          AS users,
+               ROUND(SUM(credits_used), 2)     AS credits
+        FROM {db}.v_user_activity_enriched
+        WHERE """ + _ENRICHED_WINDOW + """
+        GROUP BY team, project, cost_center
+        ORDER BY credits DESC LIMIT 50
+        """,
+        ["team", "project", "cost_center", "users", "credits"],
+    ),
     "cost_top_users": (
         """
         SELECT COALESCE(display_name, userid) AS k,
@@ -359,6 +382,28 @@ QUERIES = {
         GROUP BY username ORDER BY v DESC LIMIT 20
         """,
         ["k", "v"],
+    ),
+
+    "prod_adoption_stages": (
+        # Adoption-maturity funnel: stage 1 inline, stage 2 chat, agentic
+        # (stage 3) is read from user_activity's auto_messages.
+        """
+        SELECT
+          SUM(COALESCE(inline_suggestions_count, 0))  AS inline_suggestions,
+          SUM(COALESCE(inline_acceptance_count, 0))   AS inline_accepts,
+          SUM(COALESCE(chat_messages_sent, 0))        AS chat_messages,
+          SUM(COALESCE(chat_ai_code_lines, 0) + COALESCE(inline_ai_code_lines, 0)) AS ai_code_lines
+        FROM {db}.v_productivity
+        WHERE """ + _ENRICHED_WINDOW,
+        ["inline_suggestions", "inline_accepts", "chat_messages", "ai_code_lines"],
+    ),
+    "prod_agentic_kpis": (
+        """
+        SELECT SUM(COALESCE(auto_messages, 0)) AS auto_messages,
+               SUM(total_messages)             AS total_messages
+        FROM {db}.v_user_activity
+        WHERE """ + _ACTIVITY_WINDOW,
+        ["auto_messages", "total_messages"],
     ),
 
     # ----------------------------------------------------------- budget
@@ -568,6 +613,8 @@ ENDPOINTS = {
         "prod_output_mix",
         "prod_lines_per_credit",
         "prod_user_summary",
+        "prod_adoption_stages",
+        "prod_agentic_kpis",
     ],
     "budget": [
         "budget_mtd",
@@ -592,6 +639,8 @@ ENDPOINTS = {
         "cost_by_project",
         "cost_by_cost_center",
         "cost_top_users",
+        "cost_mapping_coverage",
+        "cost_allocation_table",
     ],
 }
 
