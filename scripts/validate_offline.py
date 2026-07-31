@@ -62,8 +62,17 @@ for template in ("cloudformation/20_backend.yaml", "cloudformation/30_frontend.y
     # security lint
     if "20_backend" in template:
         pool = resources.get("UserPool", {}).get("Properties", {})
-        check("backend: no self-signup",
-              pool.get("AdminCreateUserConfig", {}).get("AllowAdminCreateUserOnly") is True)
+        # Self-signup is allowed ONLY behind the domain-allowlist PreSignUp
+        # trigger: the flag must be the conditional !If on SelfSignupEnabled
+        # (never a bare `false`), and the trigger + permission must exist.
+        signup_flag = pool.get("AdminCreateUserConfig", {}).get("AllowAdminCreateUserOnly")
+        conditional = isinstance(signup_flag, (list, str)) and "SelfSignupEnabled" in str(signup_flag)
+        check("backend: self-signup gated by domain condition",
+              signup_flag is True or conditional, f"flag={signup_flag!r}")
+        check("backend: presignup domain trigger defined",
+              "PreSignupFunction" in resources
+              and resources["PreSignupFunction"].get("Condition") == "SelfSignupEnabled"
+              and "ALLOWED_EMAIL_DOMAINS" in str(resources["PreSignupFunction"]))
         check("backend: SPA client has no secret", "GenerateSecret: false" in text)
         check("backend: PKCE code flow only", re.search(r"AllowedOAuthFlows:\s*\[code\]", text) is not None)
         check("backend: JWT authorizer on route", "AuthorizationType: JWT" in text)
