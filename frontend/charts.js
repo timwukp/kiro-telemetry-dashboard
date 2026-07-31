@@ -219,7 +219,7 @@ const Charts = (() => {
     box.style.display = 'flex';
     box.style.alignItems = 'center';
     box.style.gap = '18px';
-    const svg = el('svg', { viewBox: `0 0 ${size} ${size}`, role: 'img', style: `max-width:${size}px` });
+    const svg = el('svg', { viewBox: `0 0 ${size} ${size}`, role: 'img', style: 'max-width:min(300px, 45%)' });
     box.appendChild(svg);
 
     const MUTED = 'var(--text-muted)';    // "Other" is not a series — neutral ink
