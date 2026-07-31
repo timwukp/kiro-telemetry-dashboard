@@ -3,13 +3,15 @@
 'use strict';
 
 (() => {
-  const state = { tab: 'architecture', days: 30, loading: false };
+  const state = { tab: 'intro', days: 30, loading: false };
 
   // Tabs that don't use the /api/{tab}?days=N shape.
   const SPECIAL_PATH = {
     architecture: '/api/health',
     policy: '/api/policy',
   };
+  // Tabs that render without any API call.
+  const LOCAL_TABS = new Set(['intro']);
 
   const $ = (sel) => document.querySelector(sel);
   const panel = () => $('#panel');
@@ -101,6 +103,13 @@
 
   /* ---------------- per-tab renderers ---------------- */
   const RENDERERS = {
+    intro() {
+      const c = card('Introduction · narrated tour (~5 min)',
+        'What this system is, why it exists, and how it works — animated, with multilingual voice-over (Amazon Polly).',
+        'full');
+      Intro.render(c);
+    },
+
     architecture(data) {
       const c = card('System architecture', 'Live pipeline — hover a node for status. Data flows left to right.', 'full');
       Arch.render(c, data);
@@ -264,6 +273,7 @@
   async function render() {
     panel().replaceChildren();
     $('#error-banner').hidden = true;
+    if (LOCAL_TABS.has(state.tab)) { RENDERERS[state.tab](); return; }
     let data;
     try {
       data = await load();
