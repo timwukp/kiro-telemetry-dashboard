@@ -372,4 +372,32 @@ def lambda_handler(event, context):
         logger.exception("unhandled error for tab %s", tab)
         return _response(500, {"error": "internal error"})
 
+    # Column-level authorization: raw prompt text is investigator-only.
+    # Non-admins still see the audit rows (who/when/which keyword) but the
+    # prompt_text column is masked server-side — never rely on UI hiding.
+    if tab == "security" and not _is_admin(event):
+        payload = _redact_prompt_text(payload)
+
     return _response(200, payload)
+
+
+def _redact_prompt_text(payload: dict) -> dict:
+    """Mask the prompt_text column in security_audit_trail for non-admins.
+    Returns a shallow-copied payload so cached objects stay unredacted for
+    admin requests served from the same warm container."""
+    audit = (payload.get("results") or {}).get("security_audit_trail")
+    if not audit or "prompt_text" not in audit.get("columns", []):
+        return payload
+    idx = audit["columns"].index("prompt_text")
+    masked_rows = [
+        row[:idx] + ["[admins only]"] + row[idx + 1:]
+        for row in audit["rows"]
+    ]
+    redacted = dict(payload)
+    redacted["results"] = dict(payload["results"])
+    redacted["results"]["security_audit_trail"] = {
+        "columns": audit["columns"],
+        "rows": masked_rows,
+    }
+    redacted["prompt_text_redacted"] = True
+    return redacted
