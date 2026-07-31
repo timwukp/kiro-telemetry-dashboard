@@ -99,6 +99,89 @@ const Policy = (() => {
     }
     drawSteering();
 
+    // ---- Organization mappings (drives Cost Governance rollups) ----
+    const orgCard = card('Organization mappings',
+      'userid → team / project / cost center. Publishing writes the cost-allocation CSV that the Cost tab joins on. Connectors below are reserved integration points.', 'full');
+    const table = document.createElement('table');
+    table.className = 'data org-map-table';
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    for (const h of ['User ID', 'Team (Jira)', 'Project (repo)', 'Cost center (dept)', '']) {
+      const th = document.createElement('th'); th.textContent = h; hr.appendChild(th);
+    }
+    thead.appendChild(hr); table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    table.appendChild(tbody);
+    let orgRows = ((policy.org_mappings || {}).rows || []).map(r => ({ ...r }));
+
+    function drawOrg() {
+      tbody.replaceChildren();
+      orgRows.forEach((row, i) => {
+        const tr = document.createElement('tr');
+        for (const key of ['userid', 'team', 'project', 'cost_center']) {
+          const td = document.createElement('td');
+          const inp = document.createElement('input');
+          inp.value = row[key] || '';
+          inp.readOnly = !isAdmin;
+          inp.placeholder = { userid: 'kiro userid', team: 'Platform Engineering',
+                              project: 'repo-name', cost_center: 'CC-4501' }[key];
+          inp.addEventListener('input', () => { orgRows[i][key] = inp.value; });
+          td.appendChild(inp); tr.appendChild(td);
+        }
+        const act = document.createElement('td');
+        if (isAdmin) {
+          const del = document.createElement('button');
+          del.className = 'ghost-btn'; del.textContent = '✕';
+          del.addEventListener('click', () => { orgRows.splice(i, 1); drawOrg(); });
+          act.appendChild(del);
+        }
+        tr.appendChild(act);
+        tbody.appendChild(tr);
+      });
+      if (!orgRows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 5; td.className = 'empty';
+        td.textContent = 'No mappings — Cost tab shows UNMAPPED until rows are published.';
+        tr.appendChild(td); tbody.appendChild(tr);
+      }
+      if (isAdmin) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        const add = document.createElement('button');
+        add.className = 'ghost-btn'; add.textContent = '+ Add mapping';
+        add.addEventListener('click', () => {
+          orgRows.push({ userid: '', team: '', project: '', cost_center: '' });
+          drawOrg();
+        });
+        td.appendChild(add); tr.appendChild(td); tbody.appendChild(tr);
+      }
+    }
+    drawOrg();
+    orgCard.appendChild(table);
+
+    // reserved connectors — visible so the integration story is explicit
+    const conn = document.createElement('div');
+    conn.className = 'connectors';
+    const connectors = (policy.org_mappings || {}).connectors || {};
+    for (const [key, label, hint] of [
+      ['jira', 'Jira', 'import team names from boards'],
+      ['github', 'GitHub', 'derive projects from repo activity'],
+      ['hr', 'HR / Finance', 'import cost centers'],
+    ]) {
+      const chip = document.createElement('div');
+      chip.className = 'connector-chip';
+      const dot = document.createElement('span');
+      const enabled = !!(connectors[key] || {}).enabled;
+      dot.className = 'conn-dot' + (enabled ? ' on' : '');
+      const txt = document.createElement('span');
+      txt.textContent = `${label} connector — ${enabled ? 'connected' : 'reserved'} · ${hint}`;
+      chip.append(dot, txt);
+      conn.appendChild(chip);
+    }
+    orgCard.appendChild(conn);
+
     // ---- DORA tracked repos ----
     const doraCard = card('DORA tracked repositories',
       'owner/repo per line. The dora-sync Lambda pulls PR data for these hourly.', 'full');
@@ -155,6 +238,10 @@ const Policy = (() => {
             mcp_allowlist: allow,
             steering_files: steering.filter(f => f.name && f.content_md),
             dora_repos: repos,
+            org_mappings: {
+              rows: orgRows.filter(r => r.userid),
+              connectors: (policy.org_mappings || {}).connectors,
+            },
           });
           status.textContent = `Published v${res.version} at ${res.updated_at}`;
         } catch (e) {
