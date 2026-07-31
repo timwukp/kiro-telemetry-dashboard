@@ -56,7 +56,8 @@ aws cloudformation deploy \
     OriginVerifySecret="$ORIGIN_SECRET" \
     CognitoDomainPrefix="$COGNITO_DOMAIN_PREFIX" \
     AlarmEmail="${ALARM_EMAIL:-}" \
-    LogBucketKmsKeyArn="$KMS_KEY_ARN"
+    LogBucketKmsKeyArn="$KMS_KEY_ARN" \
+    AllowedSignupDomains="${ALLOWED_SIGNUP_DOMAINS:-}"
 
 bout() { aws cloudformation describe-stacks --stack-name "$BACKEND_STACK" \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
@@ -72,6 +73,14 @@ log "Uploading Lambda code ($API_FUNCTION)"
 aws lambda update-function-code --function-name "$API_FUNCTION" \
   --zip-file fileb:///tmp/kiro-dashboard-api.zip --publish >/dev/null
 rm -f /tmp/kiro-dashboard-api.zip
+
+if aws lambda get-function --function-name kiro-dashboard-presignup >/dev/null 2>&1; then
+  log "Uploading presignup Lambda code"
+  ( cd lambda/presignup && zip -q -X -r /tmp/kiro-dashboard-presignup.zip presignup.py )
+  aws lambda update-function-code --function-name kiro-dashboard-presignup \
+    --zip-file fileb:///tmp/kiro-dashboard-presignup.zip --publish >/dev/null
+  rm -f /tmp/kiro-dashboard-presignup.zip
+fi
 
 log "Uploading scanner Lambda code"
 ( cd lambda/scanner && zip -q -X -r /tmp/kiro-dashboard-scanner.zip scanner.py )
