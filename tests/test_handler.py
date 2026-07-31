@@ -159,6 +159,50 @@ class TestPolicyRoutes(unittest.TestCase):
         self.assertEqual(resp["statusCode"], 413)
 
 
+class TestPromptTextRedaction(unittest.TestCase):
+    PAYLOAD = {
+        "days": 30,
+        "results": {
+            "security_audit_trail": {
+                "columns": ["log_date", "username", "keyword_triggered", "after_hours_flag", "prompt_text"],
+                "rows": [["2026-07-31", "alice", "token", "0", "my gitlab token rotation chat"]],
+            },
+            "security_keyword_breakdown": {"columns": ["k", "v"], "rows": [["token", "3"]]},
+        },
+    }
+
+    def test_non_admin_gets_masked_prompt_text(self):
+        with mock.patch.object(handler, "_handle_tab", return_value=self.PAYLOAD):
+            event = make_event(path="/api/security")
+            resp = handler.lambda_handler(event, None)
+        body = json.loads(resp["body"])
+        row = body["results"]["security_audit_trail"]["rows"][0]
+        self.assertEqual(row[4], "[admins only]")
+        self.assertTrue(body["prompt_text_redacted"])
+        # other panels untouched
+        self.assertEqual(body["results"]["security_keyword_breakdown"]["rows"], [["token", "3"]])
+
+    def test_admin_sees_full_prompt_text(self):
+        with mock.patch.object(handler, "_handle_tab", return_value=self.PAYLOAD):
+            event = make_event(path="/api/security")
+            event["requestContext"] = {
+                "http": {"method": "GET"},
+                "authorizer": {"jwt": {"claims": {"cognito:groups": "[admins]"}}},
+            }
+            resp = handler.lambda_handler(event, None)
+        body = json.loads(resp["body"])
+        row = body["results"]["security_audit_trail"]["rows"][0]
+        self.assertIn("gitlab token", row[4])
+        self.assertNotIn("prompt_text_redacted", body)
+
+    def test_redaction_does_not_mutate_cached_payload(self):
+        with mock.patch.object(handler, "_handle_tab", return_value=self.PAYLOAD):
+            handler.lambda_handler(make_event(path="/api/security"), None)
+        # original object (as cached) must be untouched for admin reuse
+        self.assertIn("gitlab token",
+                      self.PAYLOAD["results"]["security_audit_trail"]["rows"][0][4])
+
+
 class TestHandlerExecution(unittest.TestCase):
     def setUp(self):
         handler._cache.clear()
