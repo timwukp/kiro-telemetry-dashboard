@@ -36,26 +36,77 @@ _LOG_WINDOW = (
 
 QUERIES = {
     # ---------------------------------------------------------------- overview
+    # KPI queries scan TWO windows (current + the equal-length one before it)
+    # and bucket with CASE — the tiles show a delta vs the previous period.
     "overview_kpis": (
         """
         SELECT
-          COUNT(DISTINCT a.userid)          AS active_users,
-          SUM(a.credits_used)               AS total_credits,
-          SUM(a.total_messages)             AS total_messages,
-          SUM(a.overage_credits_used)       AS overage_credits
+          COUNT(DISTINCT CASE WHEN date("date") >= date_add('day', -{days}, current_date)
+                              THEN a.userid END)                       AS active_users,
+          SUM(CASE WHEN date("date") >= date_add('day', -{days}, current_date)
+                   THEN a.credits_used ELSE 0 END)                     AS total_credits,
+          SUM(CASE WHEN date("date") >= date_add('day', -{days}, current_date)
+                   THEN a.total_messages ELSE 0 END)                   AS total_messages,
+          SUM(CASE WHEN date("date") >= date_add('day', -{days}, current_date)
+                   THEN a.overage_credits_used ELSE 0 END)             AS overage_credits,
+          COUNT(DISTINCT CASE WHEN date("date") < date_add('day', -{days}, current_date)
+                              THEN a.userid END)                       AS prev_active_users,
+          SUM(CASE WHEN date("date") < date_add('day', -{days}, current_date)
+                   THEN a.credits_used ELSE 0 END)                     AS prev_credits,
+          SUM(CASE WHEN date("date") < date_add('day', -{days}, current_date)
+                   THEN a.total_messages ELSE 0 END)                   AS prev_messages
         FROM {db}.v_user_activity a
-        WHERE """ + _ACTIVITY_WINDOW,
-        ["active_users", "total_credits", "total_messages", "overage_credits"],
+        WHERE dt >= date_format(date_add('day', -2*{days}, current_date), '%Y/%m/%d')
+          AND date("date") >= date_add('day', -2*{days}, current_date)
+        """,
+        ["active_users", "total_credits", "total_messages", "overage_credits",
+         "prev_active_users", "prev_credits", "prev_messages"],
     ),
     "overview_security_kpis": (
         """
         SELECT
-          SUM(sensitive_flag)     AS sensitive_hits,
-          SUM(after_hours_flag)   AS after_hours_events,
-          COUNT(*)                AS total_prompts
+          SUM(CASE WHEN date(log_date) >= date_add('day', -{days}, current_date)
+                   THEN sensitive_flag ELSE 0 END)                     AS sensitive_hits,
+          SUM(CASE WHEN date(log_date) >= date_add('day', -{days}, current_date)
+                   THEN after_hours_flag ELSE 0 END)                   AS after_hours_events,
+          SUM(CASE WHEN date(log_date) >= date_add('day', -{days}, current_date)
+                   THEN 1 ELSE 0 END)                                  AS total_prompts,
+          SUM(CASE WHEN date(log_date) < date_add('day', -{days}, current_date)
+                   THEN sensitive_flag ELSE 0 END)                     AS prev_sensitive,
+          SUM(CASE WHEN date(log_date) < date_add('day', -{days}, current_date)
+                   THEN after_hours_flag ELSE 0 END)                   AS prev_after_hours,
+          SUM(CASE WHEN date(log_date) < date_add('day', -{days}, current_date)
+                   THEN 1 ELSE 0 END)                                  AS prev_prompts
         FROM {db}.v_prompt_logs
-        WHERE """ + _LOG_WINDOW,
-        ["sensitive_hits", "after_hours_events", "total_prompts"],
+        WHERE dt >= date_format(date_add('day', -2*{days}, current_date), '%Y/%m/%d/00')
+          AND date(log_date) >= date_add('day', -2*{days}, current_date)
+        """,
+        ["sensitive_hits", "after_hours_events", "total_prompts",
+         "prev_sensitive", "prev_after_hours", "prev_prompts"],
+    ),
+    "overview_daily_trends": (
+        """
+        SELECT "date" AS d,
+               COUNT(DISTINCT userid)          AS users,
+               ROUND(SUM(credits_used), 2)     AS credits,
+               SUM(total_messages)             AS messages
+        FROM {db}.v_user_activity
+        WHERE """ + _ACTIVITY_WINDOW + """
+        GROUP BY "date" ORDER BY d
+        """,
+        ["d", "users", "credits", "messages"],
+    ),
+    "overview_security_trends": (
+        """
+        SELECT log_date AS d,
+               SUM(sensitive_flag)    AS sensitive,
+               SUM(after_hours_flag)  AS after_hours,
+               COUNT(*)               AS prompts
+        FROM {db}.v_prompt_logs
+        WHERE """ + _LOG_WINDOW + """
+        GROUP BY log_date ORDER BY d
+        """,
+        ["d", "sensitive", "after_hours", "prompts"],
     ),
 
     # ------------------------------------------------------- usage & adoption
@@ -488,7 +539,8 @@ QUERIES = {
 # Endpoint -> the named queries it runs (one Athena execution per query,
 # executed concurrently by the handler).
 ENDPOINTS = {
-    "overview": ["overview_kpis", "overview_security_kpis"],
+    "overview": ["overview_kpis", "overview_security_kpis",
+                 "overview_daily_trends", "overview_security_trends"],
     "usage": [
         "usage_daily_active_users",
         "usage_daily_credits",
