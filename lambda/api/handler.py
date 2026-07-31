@@ -41,6 +41,7 @@ WORKGROUP = os.environ["WORKGROUP"]
 ORIGIN_VERIFY_SECRET = os.environ["ORIGIN_VERIFY_SECRET"]
 LOG_BUCKET = os.environ.get("LOG_BUCKET", "")
 POLICY_PREFIX = os.environ.get("POLICY_PREFIX", "kiro/policy/")
+MAPPING_PREFIX = os.environ.get("MAPPING_PREFIX", "kiro/mappings")
 MAX_POLICY_BYTES = 64 * 1024     # a 64KB allowlist is already enormous
 
 CACHE_TTL_SECONDS = 300          # warm-container cache; Athena is the cold path
@@ -70,6 +71,21 @@ DEFAULT_POLICY = {
     "mcp_allowlist": {},     # Kiro mcp.json "mcpServers" object shape
     "steering_files": [],    # [{"name": "...", "content_md": "..."}]
     "dora_repos": [],        # ["owner/repo", ...] tracked by the dora-sync Lambda
+    # Organization mappings drive Cost Governance rollups. Rows are written
+    # to the user_project CSV in S3 on publish. `connectors` are RESERVED
+    # integration points — the shapes are final but nothing calls them yet;
+    # wire Jira/HR sync here later without changing the policy schema.
+    "org_mappings": {
+        "rows": [],          # [{userid, team, project, cost_center}]
+        "connectors": {
+            "jira":  {"enabled": False, "base_url": "", "board": "",
+                      "note": "reserved: import team names from Jira boards"},
+            "hr":    {"enabled": False, "api_url": "",
+                      "note": "reserved: import cost centers from the HR/finance system"},
+            "github": {"enabled": False, "org": "",
+                       "note": "reserved: derive project names from repository activity"},
+        },
+    },
     "notes": "Distributed to developer machines via kiro-policy-sync.sh; "
              "workspace-level Kiro config can still override user-level — "
              "telemetry audit is the compensating control.",
@@ -272,6 +288,16 @@ def _put_policy(event: dict) -> dict:
         isinstance(r, str) and _re.fullmatch(r"[\w.-]+/[\w.-]+", r) for r in dora_repos
     ):
         return _response(400, {"error": "dora_repos must be a list of 'owner/repo' strings"})
+    org = incoming.get("org_mappings", {"rows": [], "connectors": {}})
+    rows = org.get("rows", [])
+    if not isinstance(rows, list) or not all(
+        isinstance(m, dict)
+        and all(isinstance(m.get(k, ""), str) and "," not in m.get(k, "") and '"' not in m.get(k, "")
+                for k in ("userid", "team", "project", "cost_center"))
+        and m.get("userid")
+        for m in rows
+    ):
+        return _response(400, {"error": "org_mappings.rows must be [{userid, team, project, cost_center}] without commas/quotes"})
     if not isinstance(steering, list) or not all(
         isinstance(f, dict) and isinstance(f.get("name"), str) and isinstance(f.get("content_md"), str)
         and f["name"].endswith(".md") and "/" not in f["name"] and ".." not in f["name"]
@@ -288,6 +314,7 @@ def _put_policy(event: dict) -> dict:
         "mcp_allowlist": allow,
         "steering_files": steering,
         "dora_repos": dora_repos,
+        "org_mappings": {"rows": rows, "connectors": org.get("connectors", DEFAULT_POLICY["org_mappings"]["connectors"])},
         "notes": DEFAULT_POLICY["notes"],
     }
     _s3.put_object(
@@ -295,7 +322,17 @@ def _put_policy(event: dict) -> dict:
         Body=json.dumps(policy, indent=2).encode(),
         ContentType="application/json",
     )
-    logger.info("policy v%s updated by %s", policy["version"], policy["updated_by"])
+    # Materialize the cost-allocation CSV the user_project Athena table reads.
+    csv_body = "userid,team,project,cost_center\n" + "".join(
+        f"{m['userid']},{m.get('team','')},{m.get('project','')},{m.get('cost_center','')}\n"
+        for m in rows
+    )
+    _s3.put_object(
+        Bucket=LOG_BUCKET, Key=MAPPING_PREFIX.rstrip("/") + "/user-project/user-project.csv",
+        Body=csv_body.encode(), ContentType="text/csv",
+    )
+    logger.info("policy v%s updated by %s (%d org mappings)",
+                policy["version"], policy["updated_by"], len(rows))
     return _response(200, policy)
 
 
