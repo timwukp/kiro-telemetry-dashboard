@@ -220,7 +220,11 @@
       Charts.donut(card('Keyword breakdown', 'Which sensitive keywords triggered'),
         rowsOf(data, 'security_keyword_breakdown'), { name: 'hits' });
       Charts.table(
-        card('Audit trail', 'Sensitive or after-hours prompts (latest 200; prompt text truncated at 500 chars)', 'full'),
+        card('Audit trail',
+          data.prompt_text_redacted
+            ? 'Sensitive or after-hours prompts (latest 200). Prompt text is investigator-only — ask an admin for access.'
+            : 'Sensitive or after-hours prompts (latest 200; prompt text truncated at 500 chars)',
+          'full'),
         ['Date', 'User', 'Keyword', 'After-hours', 'Prompt (truncated)'],
         rowsOf(data, 'security_audit_trail'),
         { pills: { 2: (v) => v && v !== 'none' ? 'crit' : 'warn' } },
