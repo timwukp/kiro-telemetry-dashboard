@@ -306,7 +306,15 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* ---- architecture diagram ---- */
 .arch svg { width: 100%; height: auto; }
 .arch-rect { fill: var(--page); stroke: var(--border); stroke-width: 1; }
+.arch-rect.arch-acc { stroke: var(--series-1); stroke-width: 1.5; }
 .arch-rect.arch-bad { stroke: var(--status-critical); stroke-width: 2; }
+.arch-lane {
+  fill: var(--text-muted); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.arch-flow2 { stroke: var(--series-3); stroke-dasharray: 5 5; animation: archflow 1.8s linear infinite; }
+.arch-alert { stroke: var(--series-2); stroke-dasharray: 5 5; animation: archflow 1.8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .arch-flow2, .arch-alert { animation: none; } }
 .arch-node { cursor: pointer; }
 .arch-node:hover .arch-rect { stroke: var(--series-1); }
 .arch-label { fill: var(--text-primary); font-size: 13px; font-weight: 600; }
