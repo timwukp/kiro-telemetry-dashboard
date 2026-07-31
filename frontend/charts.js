@@ -301,21 +301,68 @@ const Charts = (() => {
     if (!rows.length) empty(container, 'No matching records in this window.');
   }
 
-  function tile(container, label, value, flag) {
-    const v = document.createElement('div');
-    v.className = 'value';
-    v.textContent = value;
+  /* Stat tile (dataviz contract): label · value · optional delta (signed,
+     vs a named period, color = direction × whether up is good) · optional
+     12-point sparkline (de-emphasis hue, accent dot on current period). */
+  function tile(container, label, value, flag, opts = {}) {
     const l = document.createElement('div');
     l.className = 'label';
     l.textContent = label;
     container.appendChild(l);
-    container.appendChild(v);
-    if (flag) {
+
+    const row = document.createElement('div');
+    row.className = 'tile-row';
+    const v = document.createElement('div');
+    v.className = 'value';
+    v.textContent = value;
+    row.appendChild(v);
+
+    if (opts.spark && opts.spark.length >= 2) {
+      const pts = opts.spark.slice(-12).map(Number);
+      const w = 64, h = 26, max = Math.max(...pts, 1), min = Math.min(...pts, 0);
+      const range = (max - min) || 1;
+      const x = (i) => 2 + (i / (pts.length - 1)) * (w - 8);
+      const y = (val) => h - 3 - ((val - min) / range) * (h - 6);
+      const svg = el('svg', { viewBox: `0 0 ${w} ${h}`, class: 'spark', 'aria-hidden': 'true' });
+      svg.appendChild(el('path', {
+        d: pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p).toFixed(1)}`).join(''),
+        fill: 'none', stroke: 'var(--text-muted)', 'stroke-width': 1.5,
+        'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+      }));
+      svg.appendChild(el('circle', {
+        cx: x(pts.length - 1), cy: y(pts[pts.length - 1]), r: 2.5,
+        fill: 'var(--series-1)',
+      }));
+      row.appendChild(svg);
+    }
+    container.appendChild(row);
+
+    if (opts.delta && isFinite(opts.delta.pct)) {
+      const d = document.createElement('div');
+      const up = opts.delta.pct >= 0;
+      const good = opts.delta.goodWhenUp ? up : !up;
+      d.className = 'flag ' + (opts.delta.pct === 0 ? '' : good ? 'good' : 'bad');
+      d.textContent = `${up ? '▲' : '▼'} ${Math.abs(opts.delta.pct).toFixed(0)}% ${opts.delta.label || 'vs previous period'}`;
+      container.appendChild(d);
+    } else if (flag) {
       const f = document.createElement('div');
       f.className = 'flag ' + flag.kind;
       f.textContent = flag.text;
       container.appendChild(f);
     }
+  }
+
+  /* Meter: fill carries severity (accent -> warning -> danger); the track
+     is a lighter step so state reads across the whole bar. */
+  function meter(container, pct, thresholds = { warn: 5, bad: 10 }) {
+    const wrap = document.createElement('div');
+    wrap.className = 'meter';
+    const fill = document.createElement('i');
+    fill.style.width = Math.min(100, Math.max(2, pct * 4)) + '%'; // 25% shows full
+    fill.style.background = pct >= thresholds.bad ? 'var(--status-critical)'
+      : pct >= thresholds.warn ? 'var(--status-warning)' : 'var(--series-1)';
+    wrap.appendChild(fill);
+    container.appendChild(wrap);
   }
 
   function empty(container, msg = 'No data in this window.') {
@@ -325,5 +372,5 @@ const Charts = (() => {
     container.appendChild(d);
   }
 
-  return { line, bar, hbar, donut, table, tile, empty };
+  return { line, bar, hbar, donut, table, tile, meter, empty };
 })();
