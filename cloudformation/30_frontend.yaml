@@ -85,7 +85,7 @@ Resources:
             ContentSecurityPolicy: >-
               default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline';
               img-src 'self' data:; connect-src 'self' https://*.amazoncognito.com;
-              font-src 'self'; base-uri 'none'; form-action 'self';
+              media-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self';
               frame-ancestors 'none'; upgrade-insecure-requests
             Override: true
 
