@@ -192,6 +192,33 @@ main { padding: 20px 24px; }
 .tile .flag.bad { color: var(--status-critical); }
 .tile .flag.good { color: var(--status-good); }
 
+/* ---- stat tile extras: sparkline row + meter ---- */
+.tile-row { display: flex; align-items: flex-end; gap: 12px; }
+.tile-row .spark { width: 64px; height: 26px; flex-shrink: 0; margin-bottom: 8px; opacity: .9; }
+.meter {
+  height: 8px; border-radius: 4px; margin-top: 10px;
+  background: color-mix(in oklab, var(--series-1) 15%, transparent);
+  overflow: hidden;
+}
+.meter i { display: block; height: 100%; border-radius: 4px; transition: width .3s ease; }
+
+/* ---- focus mode: one card fills the panel ---- */
+.card { position: relative; }
+.card-expand {
+  position: absolute; top: 10px; right: 10px; z-index: 2;
+  background: none; border: none; color: var(--text-muted);
+  font-size: 15px; line-height: 1; padding: 5px 7px; border-radius: 6px;
+  cursor: pointer; opacity: 0;
+}
+.card:hover .card-expand { opacity: 1; }
+.card-expand:hover { background: var(--page); color: var(--text-primary); }
+.grid.has-focus .card:not(.card-focus) { display: none; }
+.card-focus { grid-column: 1 / -1 !important; min-height: calc(100vh - 150px); }
+.card-focus .card-expand { opacity: 1; color: var(--series-1); }
+.card-focus .table-scroll { max-height: calc(100vh - 260px); }
+.card-focus .chart-box svg { max-height: calc(100vh - 240px); }
+@media (pointer: coarse) { .card-expand { opacity: 1; } }  /* touch: always visible */
+
 /* ---- charts ---- */
 .chart-box { position: relative; width: 100%; }
 .chart-box svg { display: block; width: 100%; height: auto; }
