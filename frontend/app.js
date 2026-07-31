@@ -81,6 +81,14 @@
     c.className = 'card' + (span ? ' ' + span : '');
     const h = document.createElement('h3');
     h.textContent = title;
+    // focus mode: expand this card to fill the panel; Esc / re-click restores
+    const ex = document.createElement('button');
+    ex.className = 'card-expand';
+    ex.title = 'Expand';
+    ex.setAttribute('aria-label', 'Expand chart');
+    ex.textContent = '\u2922';   // ⤢
+    ex.addEventListener('click', () => toggleFocus(c));
+    c.appendChild(ex);
     c.appendChild(h);
     if (sub) {
       const p = document.createElement('p');
@@ -92,14 +100,34 @@
     return c;
   }
 
-  function tileCard(label, value, flag) {
+  function tileCard(label, value, flag, opts) {
     const c = document.createElement('div');
     c.className = 'card tile';
-    Charts.tile(c, label, value, flag);
+    Charts.tile(c, label, value, flag, opts);
     panel().appendChild(c);
   }
 
   const fmtN = (v) => v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 });
+
+  /* ---------------- focus mode ---------------- */
+  function toggleFocus(cardEl) {
+    const p = panel();
+    const already = cardEl.classList.contains('card-focus');
+    p.querySelectorAll('.card-focus').forEach(c => c.classList.remove('card-focus'));
+    if (already) {
+      p.classList.remove('has-focus');
+    } else {
+      cardEl.classList.add('card-focus');
+      p.classList.add('has-focus');
+      cardEl.scrollIntoView({ block: 'start' });
+    }
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const focused = panel().querySelector('.card-focus');
+      if (focused) toggleFocus(focused);
+    }
+  });
 
   /* ---------------- per-tab renderers ---------------- */
   const RENDERERS = {
@@ -193,17 +221,44 @@
     overview(data) {
       const kpi = rowsOf(data, 'overview_kpis')[0] || [];
       const sec = rowsOf(data, 'overview_security_kpis')[0] || [];
-      tileCard('Active users', fmtN(kpi[0]));
-      tileCard('Credits used', fmtN(kpi[1]));
-      tileCard('Total messages', fmtN(kpi[2]));
+      const trends = rowsOf(data, 'overview_daily_trends');       // [d, users, credits, messages]
+      const secTrends = rowsOf(data, 'overview_security_trends'); // [d, sensitive, after_hours, prompts]
+
+      const deltaOf = (cur, prev, goodWhenUp) => {
+        cur = Number(cur); prev = Number(prev);
+        if (!isFinite(cur) || !isFinite(prev) || prev === 0) return undefined;
+        return { pct: 100 * (cur - prev) / prev, goodWhenUp,
+                 label: `vs previous ${state.days}d` };
+      };
+      const col = (rows, i) => rows.map(r => Number(r[i]) || 0);
+
+      tileCard('Active users', fmtN(kpi[0]), null,
+        { delta: deltaOf(kpi[0], kpi[4], true), spark: col(trends, 1) });
+      tileCard('Credits used', fmtN(kpi[1]), null,
+        { delta: deltaOf(kpi[1], kpi[5], false), spark: col(trends, 2) });
+      tileCard('Total messages', fmtN(kpi[2]), null,
+        { delta: deltaOf(kpi[2], kpi[6], true), spark: col(trends, 3) });
       tileCard('Overage credits', fmtN(kpi[3]),
         Number(kpi[3]) > 0 ? { kind: 'bad', text: '▲ overage in window' } : { kind: 'good', text: 'within plan' });
       tileCard('Sensitive-keyword hits', fmtN(sec[0]),
-        Number(sec[0]) > 0 ? { kind: 'bad', text: '⚠ review audit trail' } : { kind: 'good', text: 'clean' });
-      tileCard('After-hours events', fmtN(sec[1]));
-      tileCard('Total prompts', fmtN(sec[2]));
-      const pctSensitive = sec[2] > 0 ? (100 * sec[0] / sec[2]).toFixed(2) + '%' : '—';
-      tileCard('Sensitive rate', pctSensitive);
+        Number(sec[0]) > 0 ? { kind: 'bad', text: '⚠ review audit trail' } : { kind: 'good', text: 'clean' },
+        { delta: deltaOf(sec[0], sec[3], false), spark: col(secTrends, 1) });
+      tileCard('After-hours events', fmtN(sec[1]), null,
+        { delta: deltaOf(sec[1], sec[4], false), spark: col(secTrends, 2) });
+      tileCard('Total prompts', fmtN(sec[2]), null,
+        { delta: deltaOf(sec[2], sec[5], true), spark: col(secTrends, 3) });
+      // Sensitive rate: meter carries severity (thresholds 5% / 10%)
+      const rate = sec[2] > 0 ? (100 * sec[0] / sec[2]) : 0;
+      const rateCard = document.createElement('div');
+      rateCard.className = 'card tile';
+      Charts.tile(rateCard, 'Sensitive rate', sec[2] > 0 ? rate.toFixed(2) + '%' : '—');
+      Charts.meter(rateCard, rate);
+      panel().appendChild(rateCard);
+
+      Charts.line(card('Daily messages', 'Total messages per day across all clients', 'full'),
+        trends.map(r => [r[0], r[3]]), { name: 'messages' });
+      Charts.bar(card('Security signals per day', 'Sensitive-keyword hits (bars); see Security tab for the audit trail', 'full'),
+        secTrends.map(r => [r[0], r[1]]), { name: 'sensitive hits', color: 7 });
     },
 
     usage(data) {
