@@ -7,7 +7,7 @@ IDENTITY_STORE_ID = os.environ['IDENTITY_STORE_ID']
 IDENTITY_STORE_REGION = os.environ['IDENTITY_STORE_REGION']
 S3_BUCKET = os.environ['S3_BUCKET']
 S3_KEY = os.environ['S3_KEY']
-DIRECTORY_ID = IDENTITY_STORE_ID  # e.g. d-96672d6eb2
+DIRECTORY_ID = IDENTITY_STORE_ID  # e.g. d-xxxxxxxxxx
 
 def lambda_handler(event, context):
     identity = boto3.client('identitystore', region_name=IDENTITY_STORE_REGION)
