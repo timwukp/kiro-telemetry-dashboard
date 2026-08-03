@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Kiro Telemetry Dashboard - Foundation (Glue database, Athena workgroup with
+  a per-query scan cap, and a daily scan-volume alarm). Written to exactly
+  mirror the resources already running in the account so they can be adopted
+  into CloudFormation via resource import. An IMPORT change set cannot create
+  new resources, so adoption is two steps:
+    1. IMPORT change set with only GovernanceDatabase + GovernanceWorkgroup
+       (comment out the SNS/alarm resources for this step).
+    2. Regular stack UPDATE with this full template, which adds the SNS topic
+       and the scan-volume alarm (both NEW - the live account has neither).
+
+Parameters:
+  DatabaseName:
+    Type: String
+    Default: kiro_governance
+    Description: Glue Data Catalog database name (must match the live database when importing).
+  WorkgroupName:
+    Type: String
+    Default: kiro-governance
+    Description: Athena workgroup name (must match the live workgroup when importing).
+  LogBucketName:
+    Type: String
+    Description: >
+      Existing S3 bucket that Kiro writes telemetry to (no s3:// prefix).
+      This template does NOT create or modify the bucket.
+  AthenaResultsPrefix:
+    Type: String
+    Default: kiro/athena-results/
+    Description: Prefix (in the log bucket) for Athena query results.
+  BytesScannedCutoffPerQuery:
+    Type: Number
+    Default: 10737418240   # 10 GB — matches the live workgroup
+    Description: Per-query scan cap enforced by the workgroup (bytes).
+  DailyScanAlarmThresholdBytes:
+    Type: Number
+    Default: 53687091200   # 50 GB
+    Description: Daily workgroup scan volume that triggers the CloudWatch alarm.
+  AlarmEmail:
+    Type: String
+    Default: ''
+    Description: Optional email to subscribe to the scan-volume SNS alarm. Blank to skip.
+
+Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
+
+Resources:
+
+  GovernanceDatabase:
+    Type: AWS::Glue::Database
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref DatabaseName
+
+  # Live workgroup has no result encryption configured; keep it that way so
+  # the imported resource matches (enable SSE on the bucket itself instead).
+  GovernanceWorkgroup:
+    Type: AWS::Athena::WorkGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Ref WorkgroupName
+      State: ENABLED
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        BytesScannedCutoffPerQuery: !Ref BytesScannedCutoffPerQuery
+        ResultConfiguration:
+          OutputLocation: !Sub s3://${LogBucketName}/${AthenaResultsPrefix}
+
+  ScanAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: kiro-governance-alarms
+
+  ScanAlarmSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      TopicArn: !Ref ScanAlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  # The per-query cutoff cannot catch many small queries adding up (the
+  # dashboard cache-warmer runs every 15 minutes); this alarm watches the
+  # workgroup's total daily scan volume.
+  AthenaHighScanAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: kiro-governance-athena-high-scan
+      AlarmDescription: Daily Athena scan volume for the governance workgroup exceeded the threshold.
+      Namespace: AWS/Athena
+      MetricName: ProcessedBytes
+      Dimensions:
+        - Name: WorkGroup
+          Value: !Ref GovernanceWorkgroup
+      Statistic: Sum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: !Ref DailyScanAlarmThresholdBytes
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref ScanAlarmTopic]
+
+Outputs:
+  DatabaseName:
+    Value: !Ref GovernanceDatabase
+  WorkgroupName:
+    Value: !Ref GovernanceWorkgroup
+  AthenaResultsLocation:
+    Value: !Sub s3://${LogBucketName}/${AthenaResultsPrefix}
+  AlarmTopicArn:
+    Value: !Ref ScanAlarmTopic
