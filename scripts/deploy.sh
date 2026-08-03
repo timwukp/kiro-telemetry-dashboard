@@ -88,6 +88,16 @@ aws lambda update-function-code --function-name kiro-dashboard-scanner \
   --zip-file fileb:///tmp/kiro-dashboard-scanner.zip --publish >/dev/null
 rm -f /tmp/kiro-dashboard-scanner.zip
 
+# Function lives in the optional identity-sync stack (02_identity_sync.yaml);
+# skip when that stack isn't deployed.
+if aws lambda get-function --function-name kiro-user-mapping-sync >/dev/null 2>&1; then
+  log "Uploading user-mapping-sync Lambda code"
+  ( cd lambda/user_mapping_sync && zip -q -X -r /tmp/kiro-user-mapping-sync.zip user_mapping_sync.py )
+  aws lambda update-function-code --function-name kiro-user-mapping-sync \
+    --zip-file fileb:///tmp/kiro-user-mapping-sync.zip --publish >/dev/null
+  rm -f /tmp/kiro-user-mapping-sync.zip
+fi
+
 # ---------------------------------------------------------------- frontend stack
 log "Deploying frontend stack ($FRONTEND_STACK)"
 aws cloudformation deploy \
