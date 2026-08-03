@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Kiro Telemetry Dashboard - Identity sync. Daily Lambda that reads all users
+  from IAM Identity Center and writes kiro/user-mapping/user_mapping.csv so
+  the user_mapping Athena table can resolve opaque Kiro userIds to names.
+  Written to exactly mirror the live kiro-user-mapping-sync function so the
+  running resources can be adopted via CloudFormation resource import
+  (Lambda functions and IAM roles support import; the placeholder ZipFile is
+  never deployed - scripts/deploy.sh uploads lambda/user_mapping_sync/ as the
+  real code, same pattern as the other functions).
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: kiro-user-mapping-sync
+    Description: Must match the live function name when importing.
+  IdentityStoreId:
+    Type: String
+    AllowedPattern: '^d-[a-z0-9]{10}$'
+    Description: IAM Identity Center identity store ID, e.g. d-xxxxxxxxxx.
+  IdentityStoreRegion:
+    Type: String
+    Description: Region of the identity store (may differ from the stack region).
+  LogBucketName:
+    Type: String
+    Description: Existing S3 bucket for telemetry (no s3:// prefix).
+  MappingKey:
+    Type: String
+    Default: kiro/user-mapping/user_mapping.csv
+    Description: Destination key for the mapping CSV (the user_mapping table's location prefix).
+  LogBucketKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: KMS key ARN if the log bucket uses SSE-KMS. Blank for SSE-S3.
+  SyncScheduleExpression:
+    Type: String
+    Default: cron(0 1 * * ? *)
+    Description: EventBridge schedule for the daily sync (matches the live rule).
+
+Conditions:
+  HasKmsKey: !Not [!Equals [!Ref LogBucketKmsKeyArn, '']]
+
+Resources:
+
+  SyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kiro-user-mapping-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: KiroUserMappingPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # identitystore:ListUsers does not support resource-level scoping.
+              - Effect: Allow
+                Action: [identitystore:ListUsers]
+                Resource: '*'
+              - Effect: Allow
+                Action: [s3:PutObject]
+                Resource: !Sub arn:aws:s3:::${LogBucketName}/kiro/user-mapping/*
+              - !If
+                - HasKmsKey
+                - Effect: Allow
+                  Action: [kms:GenerateDataKey, kms:Decrypt]
+                  Resource: !Ref LogBucketKmsKeyArn
+                - !Ref AWS::NoValue
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+
+  SyncFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      Runtime: python3.12
+      Handler: user_mapping_sync.lambda_handler
+      Timeout: 30
+      MemorySize: 128
+      Role: !GetAtt SyncRole.Arn
+      Environment:
+        Variables:
+          IDENTITY_STORE_ID: !Ref IdentityStoreId
+          IDENTITY_STORE_REGION: !Ref IdentityStoreRegion
+          S3_BUCKET: !Ref LogBucketName
+          S3_KEY: !Ref MappingKey
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              raise Exception("placeholder; scripts/deploy.sh uploads lambda/user_mapping_sync/ as the real code")
+
+  SyncScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: kiro-user-mapping-daily-sync
+      ScheduleExpression: !Ref SyncScheduleExpression
+      State: ENABLED
+      Targets:
+        - Id: lambda-target
+          Arn: !GetAtt SyncFunction.Arn
+
+  SyncInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SyncFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SyncScheduleRule.Arn
+
+Outputs:
+  FunctionArn:
+    Value: !GetAtt SyncFunction.Arn
+  RoleArn:
+    Value: !GetAtt SyncRole.Arn
+  MappingLocation:
+    Value: !Sub s3://${LogBucketName}/${MappingKey}
