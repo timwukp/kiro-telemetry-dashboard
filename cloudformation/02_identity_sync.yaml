@@ -44,6 +44,8 @@ Resources:
 
   SyncRole:
     Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       RoleName: kiro-user-mapping-lambda-role
       AssumeRolePolicyDocument:
@@ -80,6 +82,8 @@ Resources:
 
   SyncFunction:
     Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       FunctionName: !Ref FunctionName
       Runtime: python3.12
@@ -100,6 +104,8 @@ Resources:
 
   SyncScheduleRule:
     Type: AWS::Events::Rule
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Name: kiro-user-mapping-daily-sync
       ScheduleExpression: !Ref SyncScheduleExpression
