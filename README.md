@@ -5,14 +5,34 @@
 > this project is an independent, community-maintained tool for working with
 > the telemetry those products emit.
 
-A production-grade, security-first web dashboard for **Kiro developer-telemetry
-governance** — self-hosted on AWS serverless, no BI license required.
+## The problem this solves
 
-This repo is self-contained: the data layer (Glue database, Athena workgroup
-with cost guardrails, identity sync, DDL) plus the **presentation + API +
-automation layer** on top. It supersedes
-[kiro-telemetry-governance](https://github.com/timwukp/kiro-telemetry-governance)
-(now archival), whose still-useful pieces were folded in here:
+You rolled out **Kiro** (or Amazon Q Developer) to your engineering org. Now
+leadership, security, and finance are asking questions the product console
+doesn't answer:
+
+- **"Who is actually using it?"** — Adoption by team, daily active users,
+  who never logged in, which licenses to reclaim at renewal.
+- **"What is it costing us, and who should pay?"** — Credits by team,
+  project, and cost center; month-to-date burn vs your overage cap;
+  chargeback reports.
+- **"Is anyone pasting secrets into prompts?"** — Sensitive-keyword
+  detection, after-hours activity, and a per-user audit trail for
+  investigations.
+- **"Is it worth it?"** — AI-generated code lines, suggestion acceptance
+  rates, lines-per-credit ROI, and DORA metrics comparing AI-assisted vs
+  unassisted merge speed.
+
+Kiro already writes the raw telemetry (prompt logs and activity reports) to
+your S3 bucket — but as gzipped JSON and CSVs nobody can read at a glance.
+This project turns that bucket into a **production-grade, security-first web
+dashboard**, self-hosted on AWS serverless (S3 → Glue → Athena → Lambda →
+CloudFront). Your telemetry never leaves your account, and there is no BI
+license to buy.
+
+The repo is self-contained: the data layer (Glue database, Athena workgroup
+with cost guardrails, identity sync, DDL) plus the presentation + API +
+automation layer on top.
 
 ![Architecture](docs/architecture.svg)
 
@@ -36,8 +56,7 @@ automation layer** on top. It supersedes
 **Performance by design (SPICE-style, serverless):** users never wait on
 Athena. A scheduled warmer materializes every tab×window query result to S3
 every 15 minutes; the API serves from that cache in ~1–2 s, stale-while-
-revalidate. See `docs/architecture.svg` and the perf notes in the governance
-repo's DESIGN_DECISIONS.
+revalidate. See `docs/architecture.svg`.
 
 **Security posture:**
 
