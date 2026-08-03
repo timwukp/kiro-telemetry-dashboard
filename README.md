@@ -8,9 +8,11 @@
 A production-grade, security-first web dashboard for **Kiro developer-telemetry
 governance** — self-hosted on AWS serverless, no BI license required.
 
-The data layer (S3 → Glue → Athena tables and views) is owned by
-[kiro-telemetry-governance](https://github.com/timwukp/kiro-telemetry-governance);
-this project adds the **presentation + API + automation layer** on top:
+This repo is self-contained: the data layer (Glue database, Athena workgroup
+with cost guardrails, identity sync, DDL) plus the **presentation + API +
+automation layer** on top. It supersedes
+[kiro-telemetry-governance](https://github.com/timwukp/kiro-telemetry-governance)
+(now archival), whose still-useful pieces were folded in here:
 
 ![Architecture](docs/architecture.svg)
 
@@ -63,13 +65,18 @@ repo's DESIGN_DECISIONS.
 ## Repository layout
 
 ```
+cloudformation/01_foundation.yaml Glue DB + Athena workgroup (import-ready) + scan-volume alarm
+cloudformation/02_identity_sync.yaml Daily Identity Center -> user_mapping.csv sync (import-ready)
 cloudformation/20_backend.yaml    Cognito, HTTP API, Lambdas, alarms, schedules
 cloudformation/30_frontend.yaml   S3 + CloudFront (OAC, security headers)
 lambda/api/                       Router, auth hardening, Athena executor, cache
 lambda/scanner/                   Governance checks -> SNS
 lambda/dora_sync/                 GitHub PR snapshot -> S3
+lambda/user_mapping_sync/         Identity Center users -> mapping CSV (mirrors live code)
 frontend/                         Vanilla-JS SPA (no framework, no build step)
-sql/                              Athena DDL this layer adds (enriched view, DORA)
+sql/                              Athena DDL (enriched view, v2 tables, DORA)
+sql/40_governance_runbook.sql     Ad-hoc admin queries (license, anomaly, incident)
+docs/SECURITY.md                  Data protection + sensitive-keyword review SOP
 scripts/deploy.sh                 Idempotent end-to-end deploy
 scripts/kiro-policy-sync.sh       Client: installs org policy into ~/.kiro/
 scripts/validate_offline.py       40+ offline security/consistency checks
@@ -78,9 +85,11 @@ tests/                            Unit tests (mocked boto3) + SVG geometry check
 
 ## Deploy
 
-Prerequisites: the [kiro-telemetry-governance](https://github.com/timwukp/kiro-telemetry-governance)
-data layer deployed (or at least Kiro telemetry landing in S3), AWS CLI v2,
-python3, a region with Athena engine v3.
+Prerequisites: Kiro telemetry landing in S3, AWS CLI v2, python3, a region
+with Athena engine v3. On a fresh account, deploy
+`cloudformation/01_foundation.yaml` and `02_identity_sync.yaml` first (on an
+account where these resources already exist unmanaged, adopt them via
+CloudFormation resource import — see the template headers).
 
 ```bash
 cp config/parameters.example.env config/parameters.env   # fill in your values
