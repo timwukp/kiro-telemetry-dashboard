@@ -109,6 +109,13 @@ Resources:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: kiro-dashboard-users
+      # Tag forces CFN to update this resource even when template params are
+      # unchanged — needed to reconcile console drift on
+      # AllowAdminCreateUserOnly (found 2026-08-04: live pool was flipped to
+      # admin-only by hand, so the Hosted UI hid the Sign up link the login
+      # page promises).
+      UserPoolTags:
+        managed-by: cloudformation
       AdminCreateUserConfig:
         # Self-signup is gated by the PreSignUp domain-allowlist trigger;
         # with no AllowedSignupDomains it stays admin-create-only.
