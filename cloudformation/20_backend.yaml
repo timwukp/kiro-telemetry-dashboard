@@ -39,8 +39,13 @@ Parameters:
     Default: ''
     Description: >
       Comma-separated email domains allowed to SELF-SIGN-UP (e.g.
-      "amazon.com"). Blank disables self-signup entirely (admin-created
+      "example.com"). Blank disables self-signup entirely (admin-created
       users only). Signups still require the emailed verification code.
+      NOTE: on AWS-internal/corporate accounts, security automation may
+      force self-signup off regardless of this parameter (observed:
+      "epoxy-mitigations-prod CognitoIdpUserPoolDisableSelf" reverts
+      AllowAdminCreateUserOnly within minutes). Leave blank there and
+      create users with admin-create-user instead of fighting the control.
   LogBucketKmsKeyArn:
     Type: String
     Default: ''
