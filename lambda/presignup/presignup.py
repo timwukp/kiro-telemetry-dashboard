@@ -7,8 +7,10 @@ is rejected before a user record is ever created. Cognito's email
 verification code remains the proof-of-mailbox-ownership: you cannot sign
 up with a colleague's address unless you can read their inbox.
 
-Admin-created users (admin_create_user) do not pass through this trigger,
-so the operator can still add external reviewers deliberately.
+Admin-created users DO pass through this trigger (Cognito invokes PreSignUp
+with triggerSource=PreSignUp_AdminCreateUser), so they are explicitly
+exempted below: creating a user is the operator's deliberate act, and it is
+the only way to add external reviewers.
 """
 
 import os
@@ -18,6 +20,11 @@ ALLOWED = [d.strip().lower() for d in
 
 
 def lambda_handler(event, context):
+    # Operator-initiated creation (console / admin-create-user) is exempt
+    # from the self-signup domain gate.
+    if event.get("triggerSource") == "PreSignUp_AdminCreateUser":
+        return event
+
     email = (event.get("request", {}).get("userAttributes", {}) or {}).get("email", "")
     domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
 
