@@ -101,12 +101,12 @@ const Policy = (() => {
 
     // ---- Organization mappings (drives Cost Governance rollups) ----
     const orgCard = card('Organization mappings',
-      'userid → team / project / cost center. Publishing writes the cost-allocation CSV that the Cost tab joins on. Connectors below are reserved integration points.', 'full');
+      'userid → team / project / cost center, plus an optional GitHub login so the DORA tab can attribute PRs to Kiro use. Publishing writes the cost-allocation CSV that the Cost tab joins on. Connectors below are reserved integration points.', 'full');
     const table = document.createElement('table');
     table.className = 'data org-map-table';
     const thead = document.createElement('thead');
     const hr = document.createElement('tr');
-    for (const h of ['User ID', 'Team (Jira)', 'Project (repo)', 'Cost center (dept)', '']) {
+    for (const h of ['User ID', 'Team (Jira)', 'Project (repo)', 'Cost center (dept)', 'GitHub login', '']) {
       const th = document.createElement('th'); th.textContent = h; hr.appendChild(th);
     }
     thead.appendChild(hr); table.appendChild(thead);
@@ -118,13 +118,14 @@ const Policy = (() => {
       tbody.replaceChildren();
       orgRows.forEach((row, i) => {
         const tr = document.createElement('tr');
-        for (const key of ['userid', 'team', 'project', 'cost_center']) {
+        for (const key of ['userid', 'team', 'project', 'cost_center', 'github_login']) {
           const td = document.createElement('td');
           const inp = document.createElement('input');
           inp.value = row[key] || '';
           inp.readOnly = !isAdmin;
           inp.placeholder = { userid: 'kiro userid', team: 'Platform Engineering',
-                              project: 'repo-name', cost_center: 'CC-4501' }[key];
+                              project: 'repo-name', cost_center: 'CC-4501',
+                              github_login: 'octocat (optional)' }[key];
           inp.addEventListener('input', () => { orgRows[i][key] = inp.value; });
           td.appendChild(inp); tr.appendChild(td);
         }
@@ -141,18 +142,18 @@ const Policy = (() => {
       if (!orgRows.length) {
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = 5; td.className = 'empty';
+        td.colSpan = 6; td.className = 'empty';
         td.textContent = 'No mappings — Cost tab shows UNMAPPED until rows are published.';
         tr.appendChild(td); tbody.appendChild(tr);
       }
       if (isAdmin) {
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = 5;
+        td.colSpan = 6;
         const add = document.createElement('button');
         add.className = 'ghost-btn'; add.textContent = '+ Add mapping';
         add.addEventListener('click', () => {
-          orgRows.push({ userid: '', team: '', project: '', cost_center: '' });
+          orgRows.push({ userid: '', team: '', project: '', cost_center: '', github_login: '' });
           drawOrg();
         });
         td.appendChild(add); tr.appendChild(td); tbody.appendChild(tr);

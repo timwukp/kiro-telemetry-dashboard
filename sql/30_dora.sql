@@ -67,3 +67,59 @@ SELECT
   is_hotfix,
   assisted_by
 FROM ${DATABASE}.dora_pull_requests;
+
+-- ---------------------------------------------------------------------
+-- VIEW: v_dora_prs_attributed — AI attribution from TWO kinds of evidence
+-- ---------------------------------------------------------------------
+-- Co-authored-by trailers only catch tools that write one. Kiro sessions,
+-- and most CLI-driven agent work, leave no trailer, so trailer-only
+-- detection under-counts AI-assisted PRs and the AI-vs-unassisted merge
+-- comparison reads them as "unassisted".
+--
+-- This view keeps the trailer verdict and adds the telemetry the dashboard
+-- already holds: a PR also counts as Kiro-assisted when its author is
+-- mapped to a Kiro userid (user_project.github_login) and that user sent
+-- Kiro messages on a day between the PR's first commit and its merge.
+--
+--   ai_evidence  'trailer'         a Co-authored-by trailer named the tool
+--                'kiro-telemetry'  no trailer, but the mapped author used Kiro
+--                                  while the PR was in flight
+--                'none'            neither (includes unmapped authors)
+--   ai_tool      the trailer's tool, else 'kiro', else 'none'
+--   kiro_active_days  days of Kiro use inside the PR window (0 if unmapped)
+--
+-- Telemetry evidence is correlation, not proof that Kiro wrote the change;
+-- the dashboard labels it as such. Unmapped authors stay 'none' rather than
+-- being guessed. The activity scan is bounded to the dora-sync lookback
+-- (120 days) so the partition projection is pruned.
+CREATE OR REPLACE VIEW ${DATABASE}.v_dora_prs_attributed AS
+WITH kiro_days AS (
+  SELECT lower(p.github_login) AS login, date(a."date") AS active_date
+  FROM ${DATABASE}.v_user_activity a
+  JOIN ${DATABASE}.user_project p ON a.userid = p.userid
+  WHERE p.github_login IS NOT NULL AND p.github_login <> ''
+    AND a.total_messages > 0
+    AND a.dt >= date_format(date_add('day', -120, current_date), '%Y/%m/%d')
+  GROUP BY 1, 2
+),
+pr_kiro AS (
+  SELECT d.repo, d.number, COUNT(k.active_date) AS kiro_active_days
+  FROM ${DATABASE}.v_dora_prs d
+  LEFT JOIN kiro_days k
+    ON k.login = lower(d.author)
+   AND d.merged_ts IS NOT NULL
+   AND k.active_date BETWEEN date(COALESCE(d.first_commit_ts, d.created_ts))
+                         AND date(d.merged_ts)
+  GROUP BY d.repo, d.number
+)
+SELECT
+  d.*,
+  COALESCE(k.kiro_active_days, 0) AS kiro_active_days,
+  CASE WHEN d.assisted_by <> 'none' THEN 'trailer'
+       WHEN COALESCE(k.kiro_active_days, 0) > 0 THEN 'kiro-telemetry'
+       ELSE 'none' END AS ai_evidence,
+  CASE WHEN d.assisted_by <> 'none' THEN d.assisted_by
+       WHEN COALESCE(k.kiro_active_days, 0) > 0 THEN 'kiro'
+       ELSE 'none' END AS ai_tool
+FROM ${DATABASE}.v_dora_prs d
+LEFT JOIN pr_kiro k ON k.repo = d.repo AND k.number = d.number

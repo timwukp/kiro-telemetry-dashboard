@@ -385,8 +385,8 @@ QUERIES = {
     ),
 
     "prod_adoption_stages": (
-        # Adoption-maturity funnel: stage 1 inline, stage 2 chat, agentic
-        # (stage 3) is read from user_activity's auto_messages.
+        # Adoption-maturity funnel: stage 1 inline, stage 2 chat. Stage 3
+        # (agentic) is prod_agentic_kpis below.
         """
         SELECT
           SUM(COALESCE(inline_suggestions_count, 0))  AS inline_suggestions,
@@ -397,13 +397,23 @@ QUERIES = {
         WHERE """ + _ENRICHED_WINDOW,
         ["inline_suggestions", "inline_accepts", "chat_messages", "ai_code_lines"],
     ),
+    # Stage 3 is the share of messages that came through the Kiro CLI, the
+    # client that runs headless and in pipelines. It is a PROXY: a person
+    # can chat interactively in the CLI too, and the frontend says so.
+    #
+    # Not auto_messages: in the user_report CSV that column is Kiro's
+    # per-model "<model>_messages" column for the Auto router (the first of
+    # the dynamic model columns), not "agent-automated messages". It is not
+    # a subset of total_messages, so auto/total is unit-mismatched and was
+    # rendering shares far above 100%.
     "prod_agentic_kpis": (
         """
-        SELECT SUM(COALESCE(auto_messages, 0)) AS auto_messages,
-               SUM(total_messages)             AS total_messages
+        SELECT SUM(CASE WHEN client_type = 'KIRO_CLI'
+                        THEN total_messages ELSE 0 END) AS cli_messages,
+               SUM(total_messages)                      AS total_messages
         FROM {db}.v_user_activity
         WHERE """ + _ACTIVITY_WINDOW,
-        ["auto_messages", "total_messages"],
+        ["cli_messages", "total_messages"],
     ),
 
     # ----------------------------------------------------------- budget
@@ -476,11 +486,13 @@ QUERIES = {
         """,
         ["d", "v"],
     ),
-    "usage_auto_share_daily": (
+    # Absolute count, never a share of total_messages: auto_messages is the
+    # Auto model's per-model message column, a different unit (see
+    # prod_agentic_kpis).
+    "usage_auto_model_messages_daily": (
         """
         SELECT "date" AS d,
-               ROUND(100.0 * SUM(COALESCE(auto_messages,0))
-                     / NULLIF(SUM(total_messages), 0), 1) AS v
+               SUM(COALESCE(auto_messages, 0)) AS v
         FROM {db}.v_user_activity
         WHERE """ + _ACTIVITY_WINDOW + """
         GROUP BY "date" ORDER BY d
@@ -500,6 +512,9 @@ QUERIES = {
     # ----------------------------------------------------------- dora
     # Snapshot table is tiny (<=120 days, a few repos) — no dt pruning
     # needed. Definitions ported from timwukp/dora-metrics-platform.
+    # AI attribution reads v_dora_prs_attributed (sql/30_dora.sql): a
+    # Co-authored-by trailer OR Kiro telemetry of the mapped author while the
+    # PR was open. ai_tool is the verdict, ai_evidence says which kind.
     "dora_kpis": (
         """
         SELECT COUNT(*)                                        AS merged_prs,
@@ -507,8 +522,8 @@ QUERIES = {
                ROUND(approx_percentile(lead_time_hours, 0.5), 1)     AS median_lead_h,
                ROUND(approx_percentile(review_latency_hours, 0.5), 1) AS median_review_latency_h,
                SUM(CASE WHEN is_revert OR is_hotfix THEN 1 ELSE 0 END) AS failure_signals,
-               SUM(CASE WHEN assisted_by <> 'none' THEN 1 ELSE 0 END)  AS ai_assisted
-        FROM {db}.v_dora_prs
+               SUM(CASE WHEN ai_tool <> 'none' THEN 1 ELSE 0 END)      AS ai_assisted
+        FROM {db}.v_dora_prs_attributed
         WHERE merged_ts IS NOT NULL
           AND date(merged_date) >= date_add('day', -{days}, current_date)
         """,
@@ -517,7 +532,7 @@ QUERIES = {
     "dora_prs_merged_daily": (
         """
         SELECT merged_date AS d, COUNT(*) AS v
-        FROM {db}.v_dora_prs
+        FROM {db}.v_dora_prs_attributed
         WHERE merged_ts IS NOT NULL
           AND date(merged_date) >= date_add('day', -{days}, current_date)
         GROUP BY merged_date ORDER BY d
@@ -528,7 +543,7 @@ QUERIES = {
         """
         SELECT merged_date AS d,
                ROUND(approx_percentile(time_to_merge_hours, 0.5), 1) AS v
-        FROM {db}.v_dora_prs
+        FROM {db}.v_dora_prs_attributed
         WHERE merged_ts IS NOT NULL
           AND date(merged_date) >= date_add('day', -{days}, current_date)
         GROUP BY merged_date ORDER BY d
@@ -538,7 +553,7 @@ QUERIES = {
     "dora_by_repo": (
         """
         SELECT repo AS k, COUNT(*) AS v
-        FROM {db}.v_dora_prs
+        FROM {db}.v_dora_prs_attributed
         WHERE merged_ts IS NOT NULL
           AND date(merged_date) >= date_add('day', -{days}, current_date)
         GROUP BY repo ORDER BY v DESC
@@ -547,37 +562,44 @@ QUERIES = {
     ),
     "dora_ai_share": (
         """
-        SELECT assisted_by AS k, COUNT(*) AS v
-        FROM {db}.v_dora_prs
+        SELECT CASE ai_evidence
+                 WHEN 'trailer'        THEN ai_tool || ' (trailer)'
+                 WHEN 'kiro-telemetry' THEN 'kiro (telemetry)'
+                 ELSE 'none' END AS k,
+               COUNT(*) AS v
+        FROM {db}.v_dora_prs_attributed
         WHERE merged_ts IS NOT NULL
           AND date(merged_date) >= date_add('day', -{days}, current_date)
-        GROUP BY assisted_by ORDER BY v DESC
+        GROUP BY 1 ORDER BY v DESC
         """,
         ["k", "v"],
     ),
     "dora_ai_vs_speed": (
-        # The headline correlation: do AI-assisted PRs merge faster?
+        # The headline correlation: do AI-assisted PRs merge faster? Each
+        # label carries its PR count, so a median over one PR reads as such.
         """
-        SELECT CASE WHEN assisted_by <> 'none' THEN 'AI-assisted' ELSE 'Unassisted' END AS k,
+        SELECT CASE WHEN ai_tool <> 'none' THEN 'AI-assisted' ELSE 'Unassisted' END
+                 || ' (n=' || CAST(COUNT(*) AS varchar) || ')' AS k,
                ROUND(approx_percentile(time_to_merge_hours, 0.5), 1) AS v
-        FROM {db}.v_dora_prs
+        FROM {db}.v_dora_prs_attributed
         WHERE merged_ts IS NOT NULL
           AND date(merged_date) >= date_add('day', -{days}, current_date)
-        GROUP BY 1 ORDER BY v
+        GROUP BY CASE WHEN ai_tool <> 'none' THEN 'AI-assisted' ELSE 'Unassisted' END
+        ORDER BY v
         """,
         ["k", "v"],
     ),
     "dora_recent_prs": (
         """
         SELECT merged_date, repo, number, title, author,
-               ROUND(time_to_merge_hours, 1) AS merge_h, assisted_by
-        FROM {db}.v_dora_prs
+               ROUND(time_to_merge_hours, 1) AS merge_h, ai_tool, ai_evidence
+        FROM {db}.v_dora_prs_attributed
         WHERE merged_ts IS NOT NULL
           AND date(merged_date) >= date_add('day', -{days}, current_date)
         ORDER BY merged_ts DESC
         LIMIT 50
         """,
-        ["merged_date", "repo", "number", "title", "author", "merge_h", "assisted_by"],
+        ["merged_date", "repo", "number", "title", "author", "merge_h", "ai_tool", "ai_evidence"],
     ),
 }
 
@@ -592,7 +614,7 @@ ENDPOINTS = {
         "usage_daily_messages",
         "usage_by_client_type",
         "usage_new_users_daily",
-        "usage_auto_share_daily",
+        "usage_auto_model_messages_daily",
     ],
     "security": [
         "security_keyword_alerts_daily",

@@ -102,11 +102,17 @@ expected = {"DATABASE", "LOG_BUCKET", "MAPPING_PREFIX", "IDENTITY_TABLE"}
 check("sql: placeholders exactly as documented", placeholders == expected,
       f"got {placeholders}")
 check("sql: enriched view defined", "CREATE OR REPLACE VIEW" in sql and "v_user_activity_enriched" in sql)
-check("sql: user_project table defined", "CREATE EXTERNAL TABLE IF NOT EXISTS" in sql)
+# user_project is dropped and re-created (like user_activity in 20_v2_tables.sql)
+# so an existing 4-column table picks up github_login; it must stay EXTERNAL
+# so the DROP removes catalog metadata only, never the CSV in S3.
+check("sql: user_project table defined",
+      "DROP TABLE IF EXISTS ${DATABASE}.user_project" in sql
+      and "CREATE EXTERNAL TABLE ${DATABASE}.user_project" in sql
+      and "github_login" in sql)
 statements = [s.strip() for s in
               "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--")).split(";")
               if s.strip()]
-check("sql: exactly 2 statements", len(statements) == 2, f"got {len(statements)}")
+check("sql: exactly 3 statements (drop, create, view)", len(statements) == 3, f"got {len(statements)}")
 
 # ---------------------------------------------------------------- 3. tests
 result = subprocess.run(

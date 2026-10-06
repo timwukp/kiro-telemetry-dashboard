@@ -156,8 +156,8 @@
       const stages = rowsOf(data, 'prod_adoption_stages')[0] || [];
       const agentic = rowsOf(data, 'prod_agentic_kpis')[0] || [];
       const [sugg, accepts, chatMsgs, aiLines] = stages.map(Number);
-      const [autoMsgs, totalMsgs] = agentic.map(Number);
-      const agenticShare = totalMsgs > 0 ? (100 * autoMsgs / totalMsgs) : 0;
+      const [cliMsgs, totalMsgs] = agentic.map(Number);
+      const agenticShare = totalMsgs > 0 ? Math.min(100, 100 * cliMsgs / totalMsgs) : 0;
 
       // Adoption-maturity strip: which stage of the AI-coding curve is this
       // org on? Stage metrics are all real telemetry, zero = honest zero.
@@ -172,8 +172,8 @@
         { n: 2, t: 'Chat assistance', d: 'asking, getting code back',
           v: chatMsgs > 0 ? `${fmtN(chatMsgs)} messages · ${fmtN(aiLines)} AI code lines` : 'not used in window',
           active: chatMsgs > 0 },
-        { n: 3, t: 'Agentic delegation', d: 'agents work autonomously',
-          v: totalMsgs > 0 ? `${agenticShare.toFixed(0)}% of ${fmtN(totalMsgs)} messages are agent-automated` : 'no activity',
+        { n: 3, t: 'Agentic delegation', d: 'agents work autonomously (Kiro CLI share, a proxy)',
+          v: totalMsgs > 0 ? `${agenticShare.toFixed(0)}% of ${fmtN(totalMsgs)} messages came through the Kiro CLI` : 'no activity',
           active: agenticShare > 30 },
       ];
       const dominant = items.filter(i => i.active).length ? Math.max(...items.map((i, x) => i.active ? x : -1)) : -1;
@@ -203,7 +203,7 @@
           `${fmtN(chatMsgs)} chat messages were sent, but inline suggestions and chat code-line ` +
           `counters only tick in the Kiro IDE. Zero here means the usage mode has matured past ` +
           `IDE assistance, not that usage dropped. For agentic-mode outcomes, see the DORA tab ` +
-          `(AI-assisted PRs, merge speed) and the automation share on Usage & Adoption.`;
+          `(AI-assisted PRs, merge speed) and the client mix on Usage & Adoption.`;
         note.appendChild(p);
       }
 
@@ -256,13 +256,13 @@
         rowsOf(data, 'dora_time_to_merge_daily'), { name: 'hours', unit: 'h' });
       Charts.hbar(card('Merged PRs by repo', 'Tracked repos (admins add more on the Policy tab)'),
         rowsOf(data, 'dora_by_repo'), { name: 'PRs' });
-      Charts.donut(card('AI assistance share', 'From Co-authored-by trailers (kiro / claude / amazon-q / copilot)'),
+      Charts.donut(card('AI assistance share', 'Co-authored-by trailer, or Kiro use by the mapped author while the PR was open (telemetry = correlation; map GitHub logins on the Policy tab)'),
         rowsOf(data, 'dora_ai_share'), { name: 'PRs' });
-      Charts.hbar(card('AI-assisted vs unassisted merge speed', 'Median hours to merge — the ROI question'),
+      Charts.hbar(card('AI-assisted vs unassisted merge speed', 'Median hours to merge — the ROI question; n = PRs per group, read small groups as anecdote'),
         rowsOf(data, 'dora_ai_vs_speed'), { name: 'median h' });
       Charts.table(
         card('Recent merged PRs', 'Latest 50 in window', 'full'),
-        ['Merged', 'Repo', '#', 'Title', 'Author', 'Merge h', 'AI'],
+        ['Merged', 'Repo', '#', 'Title', 'Author', 'Merge h', 'AI', 'Evidence'],
         rowsOf(data, 'dora_recent_prs'),
         { pills: { 6: (v) => v && v !== 'none' ? 'crit' : 'warn' } },
       );
@@ -326,8 +326,8 @@
         rowsOf(data, 'usage_by_client_type'), { name: 'messages' });
       Charts.bar(card('New users per day', 'From the report’s New_User flag'),
         rowsOf(data, 'usage_new_users_daily'), { name: 'new users', color: 2 });
-      Charts.line(card('Automated message share', '% of messages sent by agents/automation vs typed'),
-        rowsOf(data, 'usage_auto_share_daily'), { name: '%', unit: '%' });
+      Charts.bar(card('Messages routed by Kiro Auto', 'Per day, from the report’s Auto model column — a model-routing count, not an automation share'),
+        rowsOf(data, 'usage_auto_model_messages_daily'), { name: 'messages', color: 3 });
     },
 
     security(data) {
