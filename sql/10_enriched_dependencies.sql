@@ -25,12 +25,21 @@
 -- ---------------------------------------------------------------------
 -- user_project — manually maintained cost-allocation mapping (FinOps).
 -- Upload mappings/user-project.csv to the LOCATION below.
+-- github_login (optional, 5th column) ties a Kiro userid to the GitHub
+-- account that authors its PRs, so DORA can attribute a PR to Kiro use
+-- (sql/30_dora.sql v_dora_prs_attributed). Older 4-column CSVs still read:
+-- the missing column is NULL. The table is dropped and re-created so an
+-- existing 4-column definition picks up the new column; it is EXTERNAL, so
+-- DROP removes only catalog metadata, never the CSV in S3.
 -- ---------------------------------------------------------------------
-CREATE EXTERNAL TABLE IF NOT EXISTS ${DATABASE}.user_project (
+DROP TABLE IF EXISTS ${DATABASE}.user_project;
+
+CREATE EXTERNAL TABLE ${DATABASE}.user_project (
   userid       string,
   team         string,
   project      string,
-  cost_center  string
+  cost_center  string,
+  github_login string
 )
 ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
 WITH SERDEPROPERTIES ('separatorChar' = ',', 'quoteChar' = '"')

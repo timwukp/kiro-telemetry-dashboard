@@ -109,6 +109,9 @@ CREATE EXTERNAL TABLE ${DATABASE}.user_activity (
   total_messages         string,
   new_user               string,
   user_email             string,
+  -- First of the dynamic "<model>_messages" columns (models in alphabetical
+  -- order, starting with Auto): messages processed by Kiro's Auto router.
+  -- NOT "agent-automated messages", and not a subset of total_messages.
   auto_messages          string
 )
 PARTITIONED BY (dt string)

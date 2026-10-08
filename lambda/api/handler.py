@@ -43,6 +43,10 @@ LOG_BUCKET = os.environ.get("LOG_BUCKET", "")
 POLICY_PREFIX = os.environ.get("POLICY_PREFIX", "kiro/policy/")
 MAPPING_PREFIX = os.environ.get("MAPPING_PREFIX", "kiro/mappings")
 MAX_POLICY_BYTES = 64 * 1024     # a 64KB allowlist is already enormous
+# Positional column order of the user_project table / user-project.csv.
+# github_login is optional: it lets the DORA view attribute a PR to Kiro use.
+MAPPING_COLUMNS = ("userid", "team", "project", "cost_center", "github_login")
+GITHUB_LOGIN_RE = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?"
 
 CACHE_TTL_SECONDS = 300          # warm-container cache; Athena is the cold path
 CACHE_PREFIX = os.environ.get("CACHE_PREFIX", "kiro/cache/")
@@ -76,7 +80,7 @@ DEFAULT_POLICY = {
     # integration points — the shapes are final but nothing calls them yet;
     # wire Jira/HR sync here later without changing the policy schema.
     "org_mappings": {
-        "rows": [],          # [{userid, team, project, cost_center}]
+        "rows": [],          # [{userid, team, project, cost_center, github_login?}]
         "connectors": {
             "jira":  {"enabled": False, "base_url": "", "board": "",
                       "note": "reserved: import team names from Jira boards"},
@@ -293,11 +297,14 @@ def _put_policy(event: dict) -> dict:
     if not isinstance(rows, list) or not all(
         isinstance(m, dict)
         and all(isinstance(m.get(k, ""), str) and "," not in m.get(k, "") and '"' not in m.get(k, "")
-                for k in ("userid", "team", "project", "cost_center"))
+                for k in MAPPING_COLUMNS)
         and m.get("userid")
+        and (not m.get("github_login") or _re.fullmatch(GITHUB_LOGIN_RE, m["github_login"]))
         for m in rows
     ):
-        return _response(400, {"error": "org_mappings.rows must be [{userid, team, project, cost_center}] without commas/quotes"})
+        return _response(400, {"error": "org_mappings.rows must be [{userid, team, project, cost_center, "
+                                        "github_login?}] without commas/quotes; github_login must be a "
+                                        "GitHub username"})
     if not isinstance(steering, list) or not all(
         isinstance(f, dict) and isinstance(f.get("name"), str) and isinstance(f.get("content_md"), str)
         and f["name"].endswith(".md") and "/" not in f["name"] and ".." not in f["name"]
@@ -323,8 +330,9 @@ def _put_policy(event: dict) -> dict:
         ContentType="application/json",
     )
     # Materialize the cost-allocation CSV the user_project Athena table reads.
-    csv_body = "userid,team,project,cost_center\n" + "".join(
-        f"{m['userid']},{m.get('team','')},{m.get('project','')},{m.get('cost_center','')}\n"
+    # Column order is the table's positional order (sql/10_enriched_dependencies.sql).
+    csv_body = ",".join(MAPPING_COLUMNS) + "\n" + "".join(
+        ",".join(m.get(k, "") for k in MAPPING_COLUMNS) + "\n"
         for m in rows
     )
     _s3.put_object(

@@ -185,13 +185,17 @@ PROMPT_PREFIX=${PROMPT_PREFIX:-kiro/prompt-log}
 ACTIVITY_PREFIX=${ACTIVITY_PREFIX:-kiro/user-activity-metrics}
 PROJECTION_START=${PROJECTION_START:-2025/01/01/00}
 REGION=${REGION:-$AWS_REGION}
+DORA_PREFIX=${DORA_PREFIX:-kiro/dora/}      # matches the dora-sync Lambda's DORA_PREFIX
 export DATABASE LOG_BUCKET MAPPING_PREFIX IDENTITY_TABLE \
-       ACCOUNT_ID PROMPT_PREFIX ACTIVITY_PREFIX PROJECTION_START REGION
+       ACCOUNT_ID PROMPT_PREFIX ACTIVITY_PREFIX PROJECTION_START REGION DORA_PREFIX
 python3 - <<'PYEOF' > /tmp/kiro-enriched-statements.txt
 import os
 vars_ = ('DATABASE', 'LOG_BUCKET', 'MAPPING_PREFIX', 'IDENTITY_TABLE',
-         'ACCOUNT_ID', 'PROMPT_PREFIX', 'ACTIVITY_PREFIX', 'PROJECTION_START', 'REGION')
-for path in ('sql/10_enriched_dependencies.sql', 'sql/20_v2_tables.sql'):
+         'ACCOUNT_ID', 'PROMPT_PREFIX', 'ACTIVITY_PREFIX', 'PROJECTION_START', 'REGION',
+         'DORA_PREFIX')
+# 30_dora.sql last: v_dora_prs_attributed joins user_project (10) and
+# v_user_activity (20).
+for path in ('sql/10_enriched_dependencies.sql', 'sql/20_v2_tables.sql', 'sql/30_dora.sql'):
     sql = open(path).read()
     for var in vars_:
         sql = sql.replace('${%s}' % var, os.environ[var])
@@ -209,7 +213,7 @@ done < /tmp/kiro-enriched-statements.txt
 # Seed an empty user-project mapping if none exists (view works, all UNMAPPED).
 if ! aws s3 ls "s3://$LOG_BUCKET/$MAPPING_PREFIX/user-project/" | grep -q csv; then
   log "Seeding empty user-project mapping (edit mappings/user-project.csv and re-upload)"
-  printf 'userid,team,project,cost_center\n' > /tmp/user-project.csv
+  printf 'userid,team,project,cost_center,github_login\n' > /tmp/user-project.csv
   aws s3 cp /tmp/user-project.csv "s3://$LOG_BUCKET/$MAPPING_PREFIX/user-project/user-project.csv" >/dev/null
 fi
 
